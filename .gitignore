@@ -1,2 +1,9 @@
 target/
 debug/
+test/toy.internal_overflow
+test/toy.internal_overflow.out.ll
+test/toy.internal_overflow.ll
+test/toy.safe
+test/toy.safe.ll
+test/toy.safe.out.ll
+src/llvm-pass/Sanitizer.so
