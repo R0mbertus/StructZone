@@ -1,2 +1,12 @@
-# project-struct-fuzzing
-Repo that contains the code for fuzzing struct overflow, for Project Systems Testing @ VU Amsterdam 
+# StructZone
+
+Fuzzing project that attempts to detect struct overflows.
+
+## Installation
+
+First, install [LibAFLs dependencies](https://github.com/AFLplusplus/LibAFL/tree/main?tab=readme-ov-file#building-and-installing),
+ and then build and install the LibAFL provided in [lib/LibAFl](./lib/LibAFL/) using cargo:
+
+```sh
+cargo build --release --manifest-path=lib/LibAFL/Cargo.toml
+```

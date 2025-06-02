@@ -1,0 +1,21 @@
+# Taken from https://aflplus.plus/libafl-book/baby_fuzzer/baby_fuzzer.html
+
+[package]
+name = "structzone"
+version = "0.1.0"
+edition = "2024"
+authors = ["Robert Klink <roberthklink@gmail.com"]
+
+[dependencies]
+libafl = { path = "lib/LibAFL/libafl" }
+libafl_bolts = { path = "lib/LibAFL/libafl_bolts" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = 3
+debug = true
