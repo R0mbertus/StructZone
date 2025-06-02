@@ -1,0 +1,9 @@
+services:
+  dev_cont:
+    build:
+      context: .
+    volumes:
+      - .:/src
+    working_dir: /src
+    stdin_open: true # docker run -i
+    tty: true
