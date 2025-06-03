@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-struct TwoFields {
+struct Simple {
     int zero;
     char one[2];
     char two[3];
@@ -8,12 +8,16 @@ struct TwoFields {
 };
 
 int main() {
-    struct TwoFields example = {
-        -1,
-        {0, 1},
-        {2, 3, 4},
-        5
-    };
+    // Note: we very explicitly do not use struct initializer, as they get lowered to memset / memcpy.
+    struct Simple example;
+    example.zero = 7;
+    example.one[0] = 1;
+    example.one[1] = 2;
+    example.two[0] = 3;
+    example.two[1] = 4;
+    example.two[2] = 5;
+    example.three = 6;
+     // Print to see what the contents are;
     printf("zero %i\n", example.zero);
     for (int i = 0; i < 2; i++)
     {

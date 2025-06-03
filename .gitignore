@@ -7,3 +7,9 @@ test/toy.safe
 test/toy.safe.ll
 test/toy.safe.out.ll
 src/llvm-pass/Sanitizer.so
+test/toy.nested.safe.ll
+test/toy.nested.safe.out.ll
+test/toy.nested.safe
+test/toy.nested.internal_overflow.ll
+test/toy.nested.internal_overflow.out.ll
+test/toy.nested.internal_overflow
