@@ -3,7 +3,7 @@ services:
     build:
       context: .
     volumes:
-      - .:/src
+      - .:/src:z
     working_dir: /src
     stdin_open: true # docker run -i
     tty: true

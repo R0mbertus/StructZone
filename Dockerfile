@@ -12,4 +12,6 @@ RUN ln -s /usr/include/llvm14/llvm /usr/include/llvm
 RUN ln -s /usr/include/llvm14/llvm-c /usr/include/llvm-c
 ENV PATH="/root/.cargo/bin:/usr/lib/llvm-14/bin:${PATH}"
 
+RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
 CMD /bin/sh -c /src/entrypoint.sh
