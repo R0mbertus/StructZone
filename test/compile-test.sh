@@ -1,6 +1,6 @@
 #! /bin/bash
 
-pass_dir="../llvm-pass/"
+pass_dir="../llvm-pass/bin/"
 # Check if the sanitizer has already been built, build if not. Yes, I'm aware, you could use makefiles for this but i can't be arsed right now.
 if [ ! -e $pass_dir"Sanitizer.so" ]
 then
