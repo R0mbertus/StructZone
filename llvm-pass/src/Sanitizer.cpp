@@ -7,6 +7,8 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
+#include "redzone.h"
+
 using namespace llvm;
 
 namespace {
@@ -91,6 +93,7 @@ namespace {
 		}
 	
 		PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
+			test_func();
 			auto datalayout = M.getDataLayout();
 			auto &context = M.getContext();
 			// Iterate over all struct types. I believe this one does NOT yet deal with external struct definitions (header files even, perhaps? certainly not libraries)
