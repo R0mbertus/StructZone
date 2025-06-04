@@ -6,8 +6,12 @@ popd
 
 pushd /src/test
 TESTS=$(find . -name '*.c')
-for i in ${x%.*}; do # Not recommended, will break on whitespace
-    ./compile-test.sh "$i"
+echo $TESTS
+echo $y
+for i in $TESTS; do # Not recommended, will break on whitespace
+    y=${i%.c}
+    x=${y##*/}
+    ./compile-test.sh "$x"
 done
 popd
 
