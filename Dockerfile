@@ -13,4 +13,6 @@ ENV PATH="/root/.cargo/bin:/usr/lib64/llvm14/bin:${PATH}"
 
 RUN dnf install -y libubsan
 
+RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
 CMD /bin/sh -c /src/entrypoint.sh
