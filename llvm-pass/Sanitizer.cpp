@@ -148,7 +148,6 @@ namespace {
 				// Additionally, note that it is not really feasible to directly store the replacing instructions, as they have to already be inserted to exist.
 				// Thus, we store the components we need to construct them.
 				std::map<Instruction*, Type*> alloca_replacements;
-				// TODO: move the computations we have made in the second bit back to the first.
 				std::map<GetElementPtrInst*, std::tuple<Type *, Type *, std::vector<Value*>>> gep_replacements;
 
 				for (auto &bb : func) {
@@ -161,6 +160,16 @@ namespace {
 							// In this case, we know the GEP refers to a struct type that will be inflated, so we should update its offset (and type).
 							if (struct_mapping.count(src_type) > 0)
 							{
+								if (struct_mapping.count(dest_type) > 0)
+								{
+									dest_type = struct_mapping[dest_type]->inflatedType;
+									// TODO on nested structs: deal with that.
+									outs() << "NOTE: ";
+									inst.dump();
+									outs() << "is a gep for a nested type: ";
+									dest_type->dump();
+									outs() << "\n";
+								}
 								std::vector<Value*> replaced_indices;
 								int cnt = 0;
 								for (auto &idx: gep_inst->indices())
@@ -187,7 +196,11 @@ namespace {
 									}
 									cnt += 1;
 								}
-								gep_replacements[gep_inst] = std::make_tuple(src_type, dest_type, replaced_indices);
+								gep_replacements[gep_inst] = std::make_tuple(
+									struct_mapping[src_type]->inflatedType,
+									dest_type,
+									replaced_indices
+								);
 							}
 						}
 						else if (auto *alloca_inst = dyn_cast<AllocaInst>(&inst))
@@ -221,17 +234,20 @@ namespace {
 				}
 				for (const auto& [inst, tup] : gep_replacements)
 				{
-					auto inflated_type = struct_mapping[std::get<0>(tup)]->inflatedType;
 					// NOTE: we _cannot_ move this to the other loop, because this gets altered by the alloca instruction replacements!
 					auto *ptr = inst->getPointerOperand();
 					builder.SetInsertPoint(inst);
+					// TODO on nested structs: somehow properly coerce the result element type?
+					// or is the issue present because we might be altering some instructions before the instructions they depend on are changed?
+					// possible solution is to first deal with all instructions that do _not_ have this, and then with those that do.
 					auto *newInst = builder.CreateGEP(
-						  inflated_type,
+						  std::get<0>(tup),
 						  ptr,
 						  ArrayRef<Value*>(std::get<2>(tup))
 					);
+					
 					inst->replaceAllUsesWith(newInst);
-    			inst->eraseFromParent();
+		  			inst->eraseFromParent();
 				}
 			}
 			// NOTE: what redzone type do we want to use? i.e., what way do we check if one is hit?
