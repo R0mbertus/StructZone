@@ -1,21 +1,43 @@
-# Taken from https://aflplus.plus/libafl-book/baby_fuzzer/baby_fuzzer.html
-
 [package]
 name = "structzone"
 version = "0.1.0"
 edition = "2024"
 authors = ["Robert Klink <roberthklink@gmail.com"]
 
-[dependencies]
-libafl = { path = "lib/LibAFL/libafl" }
-libafl_bolts = { path = "lib/LibAFL/libafl_bolts" }
-
-[profile.dev]
-panic = "abort"
+[features]
+default = ["std"]
+std = []
+no_link_main = ["libafl_targets/libfuzzer_no_link_main"]
 
 [profile.release]
-panic = "abort"
 lto = true
 codegen-units = 1
 opt-level = 3
 debug = true
+
+[profile.release-fuzzbench]
+inherits = "release"
+debug = false
+strip = true
+
+[build-dependencies]
+cc = { version = "1.0.106", features = ["parallel"] }
+which = "6.0.3"
+
+[dependencies]
+libafl = { path = "lib/LibAFL/libafl" }
+libafl_bolts = { path = "lib/LibAFL/libafl_bolts" }
+libafl_targets = { path = "lib/LibAFL/libafl_targets", features = [
+    "sancov_pcguard_hitcounts",
+    "sancov_cmplog",
+    "libfuzzer",
+] }
+# TODO Include it only when building cc
+libafl_cc = { path = "lib/LibAFL/libafl_cc" }
+log = { version = "0.4.22", features = ["release_max_level_info"] }
+clap = { version = "4.5.18", features = ["default"] }
+mimalloc = { version = "0.1.43", default-features = false }
+
+[lib]
+name = "fuzzbench"
+crate-type = ["staticlib"]
