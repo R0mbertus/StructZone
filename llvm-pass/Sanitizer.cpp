@@ -50,7 +50,6 @@ namespace {
 			std::map<size_t, size_t> offset_mapping;
 			
 			size_t base_offset = 0;
-			size_t mapped_offset = 0;
 			for (auto fieldType : s->elements())
 			{
 				FieldInfo field = {
@@ -66,18 +65,18 @@ namespace {
 				mappedFields.push_back(fieldType);
 				mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
 				// Finally, we store the difference in offsets that accumulates due to redzones.
-				offset_mapping[base_offset] = mapped_offset;
-				base_offset += field.size;
-				mapped_offset += (field.size + REDZONE_SIZE);
+				offset_mapping[base_offset] = base_offset * 2;
+				base_offset += 1;
 			}
 			// The last redzone (at least for now) is superfluous since it does not protect against internal overflows.
+			// when we add external overflow guards, we can simply remove this and add one redzone before we loop over the elements.
 			mappedFields.pop_back();
 			
 			// If the inflated type doesn't exist yet, create it. For recursion, it will already exist, so lets not create duplicates.
 			auto inflated_type = StructType::getTypeByName(ctx, s->getName().str() + ".inflated");
 			if (inflated_type == NULL)
 			{
-				inflated_type = StructType::create(ctx, s->getName().str()+".inflated");
+				inflated_type = StructType::create(ctx, s->getName().str() + ".inflated");
 				inflated_type->setBody(ArrayRef<Type*>(mappedFields));
 			}
 			
@@ -95,13 +94,14 @@ namespace {
 			auto datalayout = M.getDataLayout();
 			auto &context = M.getContext();
 			// Iterate over all struct types. I believe this one does NOT yet deal with external struct definitions (header files even, perhaps? certainly not libraries)
-			std::vector<std::shared_ptr<StructInfo>> structs;
+			std::map<Type*, std::shared_ptr<StructInfo>> struct_mapping;
 			for (auto st : M.getIdentifiedStructTypes())
 			{
-				structs.push_back(WalkStruct(st, datalayout, context));
+				auto si = WalkStruct(st, datalayout, context);
+				struct_mapping[st] = si;
 			}
 			// Printing to verify everything works as expected. just for debugging.
-			for (auto &structInfo: structs)
+			for (const auto& [st, structInfo] : struct_mapping)
 			{
 				int fieldCount = 0;
 				structInfo->type->dump();
@@ -143,21 +143,104 @@ namespace {
 				{
 					continue;
 				}
-				// for now, track:
-				// - alloca's with a known struct type.
-				// - getelementptr whose source is a known struct instance (i.e. an alloca)
-				// that gives all accesses to the struct.
-				// we can change the struct accesses through the offset mapping, and the redzone size through the appropriately named constant.
-				// NOTE: what redzone type do we want to use? i.e., what way do we check if one is hit?
-				outs() << "function with name " << func.getName() << "\n";
-			}
+				// Here, we store instructions and the replacements they will get.
+				// This construction is necessary because doing so invalidates existing iterators, so we cannot do it inside the loop.
+				// Additionally, note that it is not really feasible to directly store the replacing instructions, as they have to already be inserted to exist.
+				// Thus, we store the components we need to construct them.
+				std::map<Instruction*, Type*> alloca_replacements;
+				// TODO: move the computations we have made in the second bit back to the first.
+				std::map<GetElementPtrInst*, std::tuple<Type *, Type *, std::vector<Value*>>> gep_replacements;
 
+				for (auto &bb : func) {
+					for (auto &inst : bb) {
+						if (auto *gep_inst = dyn_cast<GetElementPtrInst>(&inst))
+						{
+							auto src_type = gep_inst->getSourceElementType();
+							// NOTE: the result element type will probably be relevant when we add support for nested structs.
+							auto dest_type = gep_inst->getResultElementType();
+							// In this case, we know the GEP refers to a struct type that will be inflated, so we should update its offset (and type).
+							if (struct_mapping.count(src_type) > 0)
+							{
+								std::vector<Value*> replaced_indices;
+								int cnt = 0;
+								for (auto &idx: gep_inst->indices())
+								{
+									if (auto *const_int = dyn_cast<ConstantInt>(idx))
+									{
+										// For a singular struct access, the first index is always zero, whereas the second index is the field index.
+										if (cnt == 1)
+										{
+											replaced_indices.push_back(ConstantInt::get(context, const_int->getValue() * 2));
+										}
+										else
+										{
+											replaced_indices.push_back(const_int);
+										}
+									}
+									else {
+										outs() << "ERROR: unknown index type at:";
+										gep_inst->print(outs());
+										outs() << " - ";
+										idx->print(outs());
+										outs() << "\n";
+										abort();
+									}
+									cnt += 1;
+								}
+								gep_replacements[gep_inst] = std::make_tuple(src_type, dest_type, replaced_indices);
+							}
+						}
+						else if (auto *alloca_inst = dyn_cast<AllocaInst>(&inst))
+						{
+							auto alloc_type = alloca_inst->getAllocatedType();
+							// If this is the case, we know the struct type and can inflate it.
+							if (struct_mapping.count(alloc_type) > 0)
+							{
+								alloca_replacements[alloca_inst] = struct_mapping[alloc_type]->inflatedType;
+							}
+							else if (alloc_type->isArrayTy())
+							{
+								outs() << "No support yet for arrays of structs. If this is an array of structs, it will be ignored.\n";
+							}
+							else if (alloc_type->isStructTy()) {
+								errs() << "Error: unknown struct detected:\n";
+								alloc_type->dump();
+								abort();
+							}
+						}
+					}
+				}
+				IRBuilder<> builder(context);
+				for (const auto& [inst, new_type] : alloca_replacements)
+				{
+					// NOTE: to support array types, we will need to pass it something else than nullptr. so we can extend what is stored in alloca_replacements to deal with that.
+					builder.SetInsertPoint(inst);
+					auto *new_alloca_inst = builder.CreateAlloca(new_type, nullptr);
+					inst->replaceAllUsesWith(new_alloca_inst);
+					inst->eraseFromParent();
+				}
+				for (const auto& [inst, tup] : gep_replacements)
+				{
+					auto inflated_type = struct_mapping[std::get<0>(tup)]->inflatedType;
+					// NOTE: we _cannot_ move this to the other loop, because this gets altered by the alloca instruction replacements!
+					auto *ptr = inst->getPointerOperand();
+					builder.SetInsertPoint(inst);
+					auto *newInst = builder.CreateGEP(
+						  inflated_type,
+						  ptr,
+						  ArrayRef<Value*>(std::get<2>(tup))
+					);
+					inst->replaceAllUsesWith(newInst);
+    			inst->eraseFromParent();
+				}
+			}
+			// NOTE: what redzone type do we want to use? i.e., what way do we check if one is hit?
 		  // TODO: from within the pass:
-			// 3. investigate what instructions are practically used to access the structs.
+			// 3. investigate what instructions are practically used to access the structs. (load, store?)
 			// 4. add sanitation checks there, for _internal overflow_.
 			// (i.e., whenever a load happens whose source is a getelementptr associated to a struct instance, first insert a call to a function which crashes if the memory is a redzone)
 			// 5. verify the program now crashes on internal overflow, but not on the safe variant.
-			// 6. move on to external overflows.
+			// 6. move on to nested structs. then after, external overflows.
 		  return PreservedAnalyses::all();
 		}
 	};
