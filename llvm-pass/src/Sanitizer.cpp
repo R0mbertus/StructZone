@@ -63,8 +63,16 @@ namespace {
 					field.structInfo = WalkStruct(structType, dl, ctx);
 				}
 				fields.push_back(field);
-				// Here, we push both the original field type, and an array of chars with a given size to store the redzone in.
-				mappedFields.push_back(fieldType);
+				// Here, we push either the original field type, _or_ the inflated variant if we are dealing with nested structs.
+				if (field.structInfo)
+				{
+					mappedFields.push_back(field.structInfo->inflatedType);
+				}
+				else
+				{	
+					mappedFields.push_back(fieldType);
+				}
+				// and an array of chars with a given size to store the redzone in.
 				mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
 				// Finally, we store the difference in offsets that accumulates due to redzones.
 				offset_mapping[base_offset] = base_offset * 2;
@@ -103,42 +111,7 @@ namespace {
 				auto si = WalkStruct(st, datalayout, context);
 				struct_mapping[st] = si;
 			}
-			// Printing to verify everything works as expected. just for debugging.
-			for (const auto& [st, structInfo] : struct_mapping)
-			{
-				int fieldCount = 0;
-				structInfo->type->dump();
-				outs() << "Has inflated variant:\n";
-				structInfo->inflatedType->dump();
-				outs() << "And fields:\n";
-				for (auto& fieldInfo: structInfo->fields)
-				{
-					if (fieldInfo.structInfo)
-					{
-						int inner_fieldCount = 0;
-						outs() << "\tNested struct type " << fieldCount << ":" << fieldInfo.size << "\n";
-						fieldInfo.structInfo->type->dump();
-						outs() << "\tHas inflated variant:\n";
-						fieldInfo.structInfo->inflatedType->dump();
-						outs() << "\tAnd fields:\n";
-						for (auto& inner_fieldInfo: fieldInfo.structInfo->fields)
-						{
-							outs() << "\t\t\t" << inner_fieldCount << ":" << inner_fieldInfo.size << "\n";
-							inner_fieldCount += 1;
-						}
-					}
-					else 
-					{
-						outs() << "\t" << fieldCount << ":" << fieldInfo.size << "\n";
-					}
-					fieldCount += 1;
-				}
-				outs() << "Offset mapping:\n";
-				for (const auto& [key, value] : structInfo->offsetMapping)
-				{
-						outs() << key << ": " << value << '\n';
-				}
-			}
+
 			for (auto &func : M) {
 				// Then it is an external function, and must be linked.
 				// We can't instrument this - though it is probably interesting in a later stage for inflating/deflating structs.
@@ -151,28 +124,17 @@ namespace {
 				// Additionally, note that it is not really feasible to directly store the replacing instructions, as they have to already be inserted to exist.
 				// Thus, we store the components we need to construct them.
 				std::map<Instruction*, Type*> alloca_replacements;
-				std::map<GetElementPtrInst*, std::tuple<Type *, Type *, std::vector<Value*>>> gep_replacements;
+				std::map<Value*, Instruction*> gep_bitcasts;
+				std::map<GetElementPtrInst*, std::tuple<Type *, std::vector<Value*>>> gep_replacements;
 
 				for (auto &bb : func) {
 					for (auto &inst : bb) {
 						if (auto *gep_inst = dyn_cast<GetElementPtrInst>(&inst))
 						{
 							auto src_type = gep_inst->getSourceElementType();
-							// NOTE: the result element type will probably be relevant when we add support for nested structs.
-							auto dest_type = gep_inst->getResultElementType();
 							// In this case, we know the GEP refers to a struct type that will be inflated, so we should update its offset (and type).
 							if (struct_mapping.count(src_type) > 0)
 							{
-								if (struct_mapping.count(dest_type) > 0)
-								{
-									dest_type = struct_mapping[dest_type]->inflatedType;
-									// TODO on nested structs: deal with that.
-									outs() << "NOTE: ";
-									inst.dump();
-									outs() << "is a gep for a nested type: ";
-									dest_type->dump();
-									outs() << "\n";
-								}
 								std::vector<Value*> replaced_indices;
 								int cnt = 0;
 								for (auto &idx: gep_inst->indices())
@@ -201,7 +163,6 @@ namespace {
 								}
 								gep_replacements[gep_inst] = std::make_tuple(
 									struct_mapping[src_type]->inflatedType,
-									dest_type,
 									replaced_indices
 								);
 							}
@@ -237,37 +198,19 @@ namespace {
 				}
 				for (const auto& [inst, tup] : gep_replacements)
 				{
-					// NOTE: we _cannot_ move this to the other loop, because this gets altered by the alloca instruction replacements!
-					outs() << "Replacing GEP instruction:\n";
-					inst->print(outs());
-					outs() << "\n";
-
-					auto *ptr = inst->getPointerOperand();
 					builder.SetInsertPoint(inst);
-					// TODO on nested structs: somehow properly coerce the result element type?
-					// or is the issue present because we might be altering some instructions before the instructions they depend on are changed?
-					// possible solution is to first deal with all instructions that do _not_ have this, and then with those that do.
-
 					auto *newInst = builder.CreateGEP(
 						std::get<0>(tup),
-						ptr,
-						ArrayRef<Value*>(std::get<2>(tup))
+						// NOTE: we _cannot_ move this to the other loop, because this gets altered by the alloca instruction replacements!
+						inst->getPointerOperand(),
+						// NOTE 2: some internal llvm magic is happening with arrayref; doing it in the prior loop gives strange failures.
+						ArrayRef<Value*>(std::get<1>(tup))
 					);
-
-					if (isa<StructType>(std::get<1>(tup)))
-					{
-						// If the destination type is a struct, we need to cast it to the inflated type.
-						newInst = builder.CreateBitCast(newInst, PointerType::getUnqual(std::get<1>(tup)));
-					}
-
-					outs() << "New GEP instruction:\n";
-					newInst->print(outs());
-					outs() << "\n";
-					
 					inst->replaceAllUsesWith(newInst);
-		  			inst->eraseFromParent();
+		  	  inst->eraseFromParent();
 				}
 			}
+			
 			// NOTE: what redzone type do we want to use? i.e., what way do we check if one is hit?
 		  // TODO: from within the pass:
 			// 3. investigate what instructions are practically used to access the structs. (load, store?)
