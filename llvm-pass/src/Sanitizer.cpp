@@ -238,16 +238,31 @@ namespace {
 				for (const auto& [inst, tup] : gep_replacements)
 				{
 					// NOTE: we _cannot_ move this to the other loop, because this gets altered by the alloca instruction replacements!
+					outs() << "Replacing GEP instruction:\n";
+					inst->print(outs());
+					outs() << "\n";
+
 					auto *ptr = inst->getPointerOperand();
 					builder.SetInsertPoint(inst);
 					// TODO on nested structs: somehow properly coerce the result element type?
 					// or is the issue present because we might be altering some instructions before the instructions they depend on are changed?
 					// possible solution is to first deal with all instructions that do _not_ have this, and then with those that do.
+
 					auto *newInst = builder.CreateGEP(
-						  std::get<0>(tup),
-						  ptr,
-						  ArrayRef<Value*>(std::get<2>(tup))
+						std::get<0>(tup),
+						ptr,
+						ArrayRef<Value*>(std::get<2>(tup))
 					);
+
+					if (isa<StructType>(std::get<1>(tup)))
+					{
+						// If the destination type is a struct, we need to cast it to the inflated type.
+						newInst = builder.CreateBitCast(newInst, PointerType::getUnqual(std::get<1>(tup)));
+					}
+
+					outs() << "New GEP instruction:\n";
+					newInst->print(outs());
+					outs() << "\n";
 					
 					inst->replaceAllUsesWith(newInst);
 		  			inst->eraseFromParent();
