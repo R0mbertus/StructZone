@@ -192,6 +192,13 @@ namespace {
 									replaced_indices
 								);
 							}
+							else if (src_type->isStructTy())
+							{
+								// Sanity check: we should be able to inflate _all_ struct types, so here, we missed some.
+								errs() << "Error: unknown struct detected:\n";
+								src_type->dump();
+								abort();
+							}
 						}
 						else if (auto *alloca_inst = dyn_cast<AllocaInst>(&inst))
 						{
@@ -212,12 +219,14 @@ namespace {
 								}
 								else if (alloc_arr_type->getElementType()->isStructTy())
 								{
+										// Sanity check: we should be able to inflate _all_ struct types, so here, we missed some.
 										errs() << "Error: unknown struct detected in array type:\n";
 										alloc_arr_type->getElementType()->dump();
 										abort();
 								}
 							}
 							else if (alloc_type->isStructTy()) {
+								// Sanity check: we should be able to inflate _all_ struct types, so here, we missed some.
 								errs() << "Error: unknown struct detected:\n";
 								alloc_type->dump();
 								abort();
@@ -255,12 +264,11 @@ namespace {
 			// 4. add sanitation checks there, for _internal overflow_.
 			// (i.e., whenever a load happens whose source is a getelementptr associated to a struct instance, first insert a call to a function which crashes if the memory is a redzone)
 			// 5. verify the program now crashes on internal overflow, but not on the safe variant.
-			// 6. move on to nested structs. then after, external overflows.
+			// 6. move on to union types. then after, external overflows.
 		  return PreservedAnalyses::all();
 		}
 	};
 }
-
 
 // register to pass manager
 extern "C" LLVM_ATTRIBUTE_WEAK llvm::PassPluginLibraryInfo

@@ -19,7 +19,7 @@ int main() {
     examples[0].three = 6;
     // overflow from the second struct back into the first.
     // we now expect everything but the first field of the first struct to be overwritten.
-    for (int i = -16; i < 5; i++)
+    for (int i = -12; i < 5; i++)
     {
         examples[1].one[i] = 0;
     }
