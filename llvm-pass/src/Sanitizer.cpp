@@ -123,8 +123,7 @@ namespace {
 				// This construction is necessary because doing so invalidates existing iterators, so we cannot do it inside the loop.
 				// Additionally, note that it is not really feasible to directly store the replacing instructions, as they have to already be inserted to exist.
 				// Thus, we store the components we need to construct them.
-				std::map<Instruction*, Type*> alloca_replacements;
-				std::map<Value*, Instruction*> gep_bitcasts;
+				std::map<Instruction*, std::tuple<Type*, Value*>> alloca_replacements;
 				std::map<GetElementPtrInst*, std::tuple<Type *, std::vector<Value*>>> gep_replacements;
 
 				for (auto &bb : func) {
@@ -132,6 +131,17 @@ namespace {
 						if (auto *gep_inst = dyn_cast<GetElementPtrInst>(&inst))
 						{
 							auto src_type = gep_inst->getSourceElementType();
+							ArrayType* arr_type = nullptr;
+							// Array type? no problem. we can just reason over the element type!
+							if (auto *src_arr_type = dyn_cast<ArrayType>(src_type))
+							{
+								arr_type = src_arr_type;
+								if (src_arr_type->getElementType()->isStructTy())
+								{
+									src_type = src_arr_type->getElementType();
+								}
+							}
+							
 							// In this case, we know the GEP refers to a struct type that will be inflated, so we should update its offset (and type).
 							if (struct_mapping.count(src_type) > 0)
 							{
@@ -139,7 +149,12 @@ namespace {
 								int cnt = 0;
 								for (auto &idx: gep_inst->indices())
 								{
-									if (auto *const_int = dyn_cast<ConstantInt>(idx))
+									if (arr_type)
+									{
+										//Then, we can just push back the index immediately, because we don't insert redzones between array elements.
+										replaced_indices.push_back(idx);
+									}
+									else if (auto *const_int = dyn_cast<ConstantInt>(idx))
 									{
 										// For a singular struct access, the first index is always zero, whereas the second index is the field index.
 										if (cnt == 1)
@@ -152,6 +167,7 @@ namespace {
 										}
 									}
 									else {
+										// NOTE: if we practically hit this, it requires runtime multiplication of two. not very clean.. but it should work.
 										outs() << "ERROR: unknown index type at:";
 										gep_inst->print(outs());
 										outs() << " - ";
@@ -161,8 +177,18 @@ namespace {
 									}
 									cnt += 1;
 								}
+								Type* res_type = nullptr;
+								// we are now done reasoning about the element type, so turn it back into an array type if that is what we started with.
+								if (arr_type)
+								{
+									res_type = ArrayType::get(struct_mapping[src_type]->inflatedType, arr_type->getArrayNumElements());
+								}
+								else 
+								{
+									res_type = struct_mapping[src_type]->inflatedType;
+								}
 								gep_replacements[gep_inst] = std::make_tuple(
-									struct_mapping[src_type]->inflatedType,
+									res_type,
 									replaced_indices
 								);
 							}
@@ -173,11 +199,23 @@ namespace {
 							// If this is the case, we know the struct type and can inflate it.
 							if (struct_mapping.count(alloc_type) > 0)
 							{
-								alloca_replacements[alloca_inst] = struct_mapping[alloc_type]->inflatedType;
+								alloca_replacements[alloca_inst] = std::make_tuple(struct_mapping[alloc_type]->inflatedType, nullptr);
 							}
-							else if (alloc_type->isArrayTy())
+							else if (auto *alloc_arr_type = dyn_cast<ArrayType>(alloc_type))
 							{
-								outs() << "No support yet for arrays of structs. If this is an array of structs, it will be ignored.\n";
+								// Here, we have an array of structs.
+								if (struct_mapping.count(alloc_arr_type->getElementType()) > 0)
+								{
+									// So we need to inflate the _element_ type.
+									auto* new_arr_type = ArrayType::get(struct_mapping[alloc_arr_type->getElementType()]->inflatedType, alloc_arr_type->getNumElements());
+									alloca_replacements[alloca_inst] = std::make_tuple(new_arr_type, alloca_inst->getArraySize());
+								}
+								else if (alloc_arr_type->getElementType()->isStructTy())
+								{
+										errs() << "Error: unknown struct detected in array type:\n";
+										alloc_arr_type->getElementType()->dump();
+										abort();
+								}
 							}
 							else if (alloc_type->isStructTy()) {
 								errs() << "Error: unknown struct detected:\n";
@@ -188,11 +226,11 @@ namespace {
 					}
 				}
 				IRBuilder<> builder(context);
-				for (const auto& [inst, new_type] : alloca_replacements)
+				for (const auto& [inst, tup] : alloca_replacements)
 				{
-					// NOTE: to support array types, we will need to pass it something else than nullptr. so we can extend what is stored in alloca_replacements to deal with that.
 					builder.SetInsertPoint(inst);
-					auto *new_alloca_inst = builder.CreateAlloca(new_type, nullptr);
+					// Note: the second element will be null for non-arrays.
+					auto *new_alloca_inst = builder.CreateAlloca(std::get<0>(tup), std::get<1>(tup));
 					inst->replaceAllUsesWith(new_alloca_inst);
 					inst->eraseFromParent();
 				}
