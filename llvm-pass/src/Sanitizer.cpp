@@ -35,11 +35,26 @@ namespace {
     	std::vector<FieldInfo> fields;
     	// The total size of the struct. Usually slightly more than the summation of the sizes of all fields due to alignment.
     	size_t size;
+    	// The total size of the _inflated_ struct.
+    	size_t inflatedSize;
     	// A mapping from offsets in the unmapped type into the mapped type.
     	std::map<size_t, size_t> offsetMapping;
     };
     
 	struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
+		// Helper function to deduplicate the sanity checks.
+		// Typically used when we want to verify all struct types are capable of being inflated.
+		void AssertNonStructType(Type* type)
+		{
+			if (type->isStructTy())
+			{
+				errs() << "Error: unknown struct detected:\n";
+				type->print(errs());
+				errs() << "\n";
+				abort();
+			}
+		}
+		
 		// Walks over a struct to provide information on its fields.
 		// If this struct contains another struct, will recurse.
 		std::shared_ptr<StructInfo> WalkStruct(StructType *s, DataLayout &dl, LLVMContext &ctx)
@@ -95,6 +110,7 @@ namespace {
 				inflated_type,
 				fields,
 				dl.getTypeAllocSize(s),
+				dl.getTypeAllocSize(inflated_type),
 				offset_mapping,
 			};
 			return std::make_shared<StructInfo>(si);
@@ -192,12 +208,9 @@ namespace {
 									replaced_indices
 								);
 							}
-							else if (src_type->isStructTy())
+							else
 							{
-								// Sanity check: we should be able to inflate _all_ struct types, so here, we missed some.
-								errs() << "Error: unknown struct detected:\n";
-								src_type->dump();
-								abort();
+								AssertNonStructType(src_type);
 							}
 						}
 						else if (auto *alloca_inst = dyn_cast<AllocaInst>(&inst))
@@ -214,25 +227,97 @@ namespace {
 								if (struct_mapping.count(alloc_arr_type->getElementType()) > 0)
 								{
 									// So we need to inflate the _element_ type.
-									auto* new_arr_type = ArrayType::get(struct_mapping[alloc_arr_type->getElementType()]->inflatedType, alloc_arr_type->getNumElements());
+									auto* new_arr_type = ArrayType::get(
+										struct_mapping[alloc_arr_type->getElementType()]->inflatedType,
+										alloc_arr_type->getNumElements()
+									);
 									alloca_replacements[alloca_inst] = std::make_tuple(new_arr_type, alloca_inst->getArraySize());
 								}
-								else if (alloc_arr_type->getElementType()->isStructTy())
+								else 
 								{
-										// Sanity check: we should be able to inflate _all_ struct types, so here, we missed some.
-										errs() << "Error: unknown struct detected in array type:\n";
-										alloc_arr_type->getElementType()->dump();
-										abort();
+									AssertNonStructType(alloc_arr_type->getElementType());
 								}
 							}
-							else if (alloc_type->isStructTy()) {
-								// Sanity check: we should be able to inflate _all_ struct types, so here, we missed some.
-								errs() << "Error: unknown struct detected:\n";
-								alloc_type->dump();
-								abort();
+							else if (auto *ptr_type = dyn_cast<PointerType>(alloc_type))
+							{
+								if (struct_mapping.count(ptr_type->getPointerElementType()) > 0)
+								{
+									outs() << "Found alloc type for pointer to struct:\n";
+									ptr_type->print(outs());
+									outs() << "\n";
+									// TODO: add a replacement alloca instruction with the inflated pointer type here.
+								}
+								else
+								{
+									AssertNonStructType(ptr_type->getPointerElementType());
+								}
+							}
+							else 
+							{
+								AssertNonStructType(alloc_type);
 							}
 						}
+						else if (auto *bitcast_instr = dyn_cast<BitCastInst>(&inst))
+						{
+							if (auto *src_type = dyn_cast<PointerType>(bitcast_instr->getSrcTy()))
+							{
+								if (struct_mapping.count(src_type->getPointerElementType()) > 0)
+								{
+									// TODO: update the source type
+									outs() << "Found bitcast instr with source as inflatable struct type:\n";
+									bitcast_instr->print(outs());
+									outs() << "\n";
+								}
+								else
+								{
+									AssertNonStructType(src_type->getPointerElementType());
+								}
+							}
+							if (auto *dest_type = dyn_cast<PointerType>(bitcast_instr->getDestTy()))
+							{
+								if (struct_mapping.count(dest_type->getPointerElementType()) > 0)
+								{
+									// TODO: update the dest type
+									outs() << "Found bitcast instr with dest as inflatable struct type:\n";
+									bitcast_instr->print(outs());
+									outs() << "\n";
+								}
+								else
+								{
+									AssertNonStructType(dest_type->getPointerElementType());
+								}
+							}
+						}
+						else if (auto* load_instr = dyn_cast<LoadInst>(&inst))
+						{
+							auto *load_type = load_instr->getType();
+							if (auto *load_type_ptr = dyn_cast<PointerType>(load_type))
+							{
+								if (struct_mapping.count(load_type_ptr->getPointerElementType()) > 0)
+								{
+									// TODO: then replace the type appropriately.
+									outs() << "Found load instr: ";
+									load_instr->print(outs());
+									outs() << "\n";
+									load_instr->getPointerOperand()->print(outs());
+									outs() << "\n";
+									load_instr->getType()->print(outs());
+									outs() << "\n===\n";
+								}
+								else
+								{
+									AssertNonStructType(load_type_ptr->getPointerElementType());
+								}
+							}
+						}
+						
+						// TODO: store instructions?
+						// not used in the toy examples we have... but perhaps if we dereference a pointer to a struct to the stack it would be present.
 					}
+				}
+				for (const auto& [key, val]: struct_mapping)
+				{
+					outs() << val->type->getName() << " has size of " << val->size << " - associated inflated type " << val->inflatedType->getName() << " has size of " << val->inflatedSize << "\n";
 				}
 				IRBuilder<> builder(context);
 				for (const auto& [inst, tup] : alloca_replacements)
@@ -257,14 +342,27 @@ namespace {
 		  	  inst->eraseFromParent();
 				}
 			}
-			
-			// NOTE: what redzone type do we want to use? i.e., what way do we check if one is hit?
-		  // TODO: from within the pass:
-			// 3. investigate what instructions are practically used to access the structs. (load, store?)
-			// 4. add sanitation checks there, for _internal overflow_.
-			// (i.e., whenever a load happens whose source is a getelementptr associated to a struct instance, first insert a call to a function which crashes if the memory is a redzone)
-			// 5. verify the program now crashes on internal overflow, but not on the safe variant.
-			// 6. move on to union types. then after, external overflows.
+			// TODO:
+			// heap assignment can be done with;
+			// - malloc
+			// - calloc
+			// - realloc
+			// and can be freed with free&friends.
+			// but before a free, its usually bitcast to i8*. thats annoying.
+			// also, will need to alter the malloc call to reserve more bytes, ofc
+			// and also all the loads that turn struct** into struct*.
+			// then it should:tm: probably work?
+			// difficulty: need to track all bitcasts from i8* to struct* and grab the source to find the actual associated malloc...
+			// and ofc also all bitcasts that turn struct itno i8.
+		  // TODO:
+		  // 1. create runtime functions which allow the tracking of redzone regions (and crashing if accessed)
+		  // 2. generate functions for each struct type to properly create/remove redzones.
+		  // 3. directly after an alloca for a struct type, add the redzones
+		  // 4. directly before the ret, remove the redzones.
+		  // 5. verify internal overflows are now properly detected.
+		  // 6. adapt to external overflows.
+		  // 7. move on to heap structs.
+		  // 8. union types?
 		  return PreservedAnalyses::all();
 		}
 	};
