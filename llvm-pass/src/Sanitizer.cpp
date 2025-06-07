@@ -164,6 +164,8 @@ namespace {
 						}
 					}
 					else {
+						// TODO: in heap arrays of structs, we get sign extensions on a gep's second index, and it is seen as an array type because the source type is Simple*.
+						// so we need to distinguish those cases.
 						// NOTE: if we practically hit this, it requires runtime multiplication of two. not very clean.. but it should work.
 						outs() << "ERROR: unknown index type at:";
 						gep_inst->print(outs());
@@ -253,6 +255,7 @@ namespace {
 				if (isa<PointerType>(bitcast_inst->getSrcTy()) && call_inst && call_inst->getCalledFunction())
 				{
 					IRBuilder<> builder(call_inst);
+					// TODO: change from startswith to ensuring its exactly equal?
 					if (call_inst->getCalledFunction()->getName().startswith("malloc"))
 					{
 						// If malloc, we need to update the first argument to the inflated size.
@@ -293,7 +296,6 @@ namespace {
 		}
 	
 		PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
-			test_func();
 			auto datalayout = M.getDataLayout();
 			auto &context = M.getContext();
 			
@@ -343,10 +345,6 @@ namespace {
 					}
 				}
 				
-				for (const auto& [key, val]: struct_mapping) {
-					outs() << val->type->getName() << " has size of " << val->size << " - associated inflated type " << val->inflatedType->getName() << " has size of " << val->inflatedSize << "\n";
-				}
-				
 				IRBuilder<> builder(context);
 				for (const auto& [inst, tup] : alloca_replacements) {
 					builder.SetInsertPoint(inst);
@@ -363,7 +361,7 @@ namespace {
 						type
 					);
 					inst->replaceAllUsesWith(newInst);
-		  	  		inst->eraseFromParent();
+  	  		inst->eraseFromParent();
 				}
 
 				for (const auto& [inst, type] : load_replacements) {
@@ -373,7 +371,7 @@ namespace {
 						inst->getPointerOperand()
 					);
 					inst->replaceAllUsesWith(newInst);
-		  	  		inst->eraseFromParent();
+  	  		inst->eraseFromParent();
 				}
 
 				for (const auto& [inst, tup] : gep_replacements) {
@@ -386,23 +384,9 @@ namespace {
 						ArrayRef<Value*>(std::get<1>(tup))
 					);
 					inst->replaceAllUsesWith(newInst);
-		  	  		inst->eraseFromParent();
+  	  		inst->eraseFromParent();
 				}
 			}
-
-			// TODO:
-			// heap assignment can be done with;
-			// - malloc
-			// - calloc
-			// - realloc
-			// and can be freed with free&friends.
-			// but before a free, its usually bitcast to i8*. thats annoying.
-			// also, will need to alter the malloc call to reserve more bytes, ofc
-			// and also all the loads that turn struct** into struct*.
-			// then it should:tm: probably work?
-			// difficulty: need to track all bitcasts from i8* to struct* and grab the source to find the actual associated malloc...
-			// and ofc also all bitcasts that turn struct itno i8.
-			
 			// TODO:
 			// 1. create runtime functions which allow the tracking of redzone regions (and crashing if accessed)
 			// 2. generate functions for each struct type to properly create/remove redzones.
