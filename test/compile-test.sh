@@ -15,11 +15,11 @@ fi
 clang -S -emit-llvm "$1.c"
 
 set -x
-# llvm-link -S ./$1.ll ./$runtime_dir"Runtime.ll" -o ./$1.runtimed.ll
+llvm-link -S ./$1.ll ./$runtime_dir"Runtime.ll" -o ./$1.runtimed.ll
 
 # Run the optimization pass.
 opt -load-pass-plugin=$pass_dir"Sanitizer.so" -S -passes=structzone-sanitizer $1".runtimed.ll" -o $1".out.ll"
 # Since this is for testing purposes, we aren't going to remove the IR files.
 
 # And then compile that llvm IR with the sanitation pass enabled.
-clang $1".out.ll" -o $1 -g -fstandalone-debug -L$runtime_dir -lruntime
+clang $1".out.ll" -o $1 -g -fstandalone-debug -L$runtime_dir -l:Runtime.a -v
