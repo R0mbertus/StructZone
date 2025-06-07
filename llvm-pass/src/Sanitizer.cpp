@@ -12,6 +12,12 @@
 using namespace llvm;
 
 namespace {
+	// typedefs for the long types we use in the pass.
+	typedef std::map<GetElementPtrInst*, std::tuple<Type *, std::vector<Value*>>> GepMap;
+	typedef std::map<Instruction*, std::tuple<Type*, Value*>> AllocaMap;
+	typedef std::map<BitCastInst*, Type*> BitcastMap;
+	typedef std::map<LoadInst*, Type*> LoadMap;
+	
 	// The size of redzones, in bytes.
 	const size_t REDZONE_SIZE = 1;
 	
@@ -26,6 +32,7 @@ namespace {
 		// In case of a struct, this is usually slightly more than the actual struct size due to alignment.
 		size_t size;
 	};
+
 	struct StructInfo {
     	// The llvm struct type.
     	StructType* type;
@@ -42,6 +49,9 @@ namespace {
     };
     
 	struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
+		std::map<Type*, std::shared_ptr<StructInfo>> struct_mapping;
+		
+		
 		// Helper function to deduplicate the sanity checks.
 		// Typically used when we want to verify all struct types are capable of being inflated.
 		void AssertNonStructType(Type* type)
@@ -115,15 +125,180 @@ namespace {
 			};
 			return std::make_shared<StructInfo>(si);
 		}
+
+		void handle_gep(GetElementPtrInst *gep_inst, GepMap &gep_replacements, LLVMContext &context) {
+			auto src_type = gep_inst->getSourceElementType();
+			ArrayType* arr_type = nullptr;
+			// Array type? no problem. we can just reason over the element type!
+			if (auto *src_arr_type = dyn_cast<ArrayType>(src_type))
+			{
+				arr_type = src_arr_type;
+				if (src_arr_type->getElementType()->isStructTy())
+				{
+					src_type = src_arr_type->getElementType();
+				}
+			}
+			
+			// In this case, we know the GEP refers to a struct type that will be inflated, so we should update its offset (and type).
+			if (struct_mapping.count(src_type) > 0)
+			{
+				std::vector<Value*> replaced_indices;
+				int cnt = 0;
+				for (auto &idx: gep_inst->indices())
+				{
+					if (arr_type)
+					{
+						//Then, we can just push back the index immediately, because we don't insert redzones between array elements.
+						replaced_indices.push_back(idx);
+					}
+					else if (auto *const_int = dyn_cast<ConstantInt>(idx))
+					{
+						// For a singular struct access, the first index is always zero, whereas the second index is the field index.
+						if (cnt == 1)
+						{
+							replaced_indices.push_back(ConstantInt::get(context, const_int->getValue() * 2));
+						}
+						else
+						{
+							replaced_indices.push_back(const_int);
+						}
+					}
+					else {
+						// NOTE: if we practically hit this, it requires runtime multiplication of two. not very clean.. but it should work.
+						outs() << "ERROR: unknown index type at:";
+						gep_inst->print(outs());
+						outs() << " - ";
+						idx->print(outs());
+						outs() << "\n";
+						abort();
+					}
+					cnt += 1;
+				}
+				Type* res_type = nullptr;
+				// we are now done reasoning about the element type, so turn it back into an array type if that is what we started with.
+				if (arr_type)
+				{
+					res_type = ArrayType::get(struct_mapping[src_type]->inflatedType, arr_type->getArrayNumElements());
+				}
+				else 
+				{
+					res_type = struct_mapping[src_type]->inflatedType;
+				}
+				gep_replacements[gep_inst] = std::make_tuple(
+					res_type,
+					replaced_indices
+				);
+			}
+			else
+			{
+				AssertNonStructType(src_type);
+			}
+		}
+
+		void handle_alloca(AllocaInst *alloca_inst, AllocaMap &alloca_replacements, LLVMContext &context, DataLayout &datalayout) {
+			auto alloc_type = alloca_inst->getAllocatedType();
+			// If this is the case, we know the struct type and can inflate it.
+			if (struct_mapping.count(alloc_type) > 0)
+			{
+				alloca_replacements[alloca_inst] = std::make_tuple(struct_mapping[alloc_type]->inflatedType, nullptr);
+			}
+			else if (auto *alloc_arr_type = dyn_cast<ArrayType>(alloc_type))
+			{
+				// Here, we have an array of structs.
+				if (struct_mapping.count(alloc_arr_type->getElementType()) > 0)
+				{
+					// So we need to inflate the _element_ type.
+					auto* new_arr_type = ArrayType::get(
+						struct_mapping[alloc_arr_type->getElementType()]->inflatedType,
+						alloc_arr_type->getNumElements()
+					);
+					alloca_replacements[alloca_inst] = std::make_tuple(new_arr_type, alloca_inst->getArraySize());
+				}
+				else 
+				{
+					AssertNonStructType(alloc_arr_type->getElementType());
+				}
+			}
+			else if (auto *ptr_type = dyn_cast<PointerType>(alloc_type))
+			{
+				if (struct_mapping.count(ptr_type->getPointerElementType()) == 0)
+				{
+					AssertNonStructType(ptr_type->getPointerElementType());
+					return;
+				}
+
+				// Replace pointer to struct with pointer to inflated struct.
+				auto *new_alloca_type = PointerType::getUnqual(
+					struct_mapping[ptr_type->getPointerElementType()]->inflatedType);
+				alloca_replacements[alloca_inst] = std::make_tuple(new_alloca_type, nullptr);
+			}
+			else 
+			{
+				AssertNonStructType(alloc_type);
+			}
+		}
+
+		void handle_bitcast(BitCastInst *bitcast_inst, BitcastMap &bitcast_replacements, LLVMContext &context) {
+			// replace all uses of other insts will take care of src type already
+			if (auto *dest_type = dyn_cast<PointerType>(bitcast_inst->getDestTy()))
+			{
+				if (struct_mapping.count(dest_type->getPointerElementType()) == 0)
+				{
+					AssertNonStructType(dest_type->getPointerElementType());
+					return;
+				}
+				
+				// First, if src is a pointer, look up if that src is from a malloc.
+				auto *call_inst = dyn_cast<CallInst>(bitcast_inst->getOperand(0));
+				if (isa<PointerType>(bitcast_inst->getSrcTy()) && call_inst && call_inst->getCalledFunction())
+				{
+					IRBuilder<> builder(call_inst);
+					if (call_inst->getCalledFunction()->getName().startswith("malloc"))
+					{
+						// If malloc, we need to update the first argument to the inflated size.
+						Value *new_size = ConstantInt::get(call_inst->getArgOperand(0)->getType(), 
+							struct_mapping[dest_type->getPointerElementType()]->inflatedSize);
+						call_inst->setArgOperand(0, new_size);
+					}
+					else if (call_inst->getCalledFunction()->getName().startswith("calloc")
+						|| call_inst->getCalledFunction()->getName().startswith("realloc"))
+					{
+						// If calloc or realloc, we need to update the second argument to the inflated size.
+						Value *new_size = ConstantInt::get(call_inst->getArgOperand(1)->getType(), 
+							struct_mapping[dest_type->getPointerElementType()]->inflatedSize);
+						call_inst->setArgOperand(1, new_size);
+					}
+				}
+
+				// Then, we can replace the type with the inflated type.
+				bitcast_replacements[bitcast_inst] = PointerType::getUnqual(
+					struct_mapping[dest_type->getPointerElementType()]->inflatedType);
+			}
+		}
+
+		void handle_load(LoadInst *load_inst, LoadMap &load_replacements, LLVMContext &context) {
+			auto *load_type = load_inst->getType();
+			if (auto *load_type_ptr = dyn_cast<PointerType>(load_type))
+			{
+				if (struct_mapping.count(load_type_ptr->getPointerElementType()) == 0)
+				{
+					AssertNonStructType(load_type_ptr->getPointerElementType());
+					return;
+				}
+				
+				// Replace with pointer to inflated type.
+				load_replacements[load_inst] = PointerType::getUnqual(
+					struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType);
+			}
+		}
 	
 		PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
 			test_func();
 			auto datalayout = M.getDataLayout();
 			auto &context = M.getContext();
+			
 			// Iterate over all struct types. I believe this one does NOT yet deal with external struct definitions (header files even, perhaps? certainly not libraries)
-			std::map<Type*, std::shared_ptr<StructInfo>> struct_mapping;
-			for (auto st : M.getIdentifiedStructTypes())
-			{
+			for (auto st : M.getIdentifiedStructTypes()) {
 				auto si = WalkStruct(st, datalayout, context);
 				struct_mapping[st] = si;
 			}
@@ -139,197 +314,69 @@ namespace {
 				// This construction is necessary because doing so invalidates existing iterators, so we cannot do it inside the loop.
 				// Additionally, note that it is not really feasible to directly store the replacing instructions, as they have to already be inserted to exist.
 				// Thus, we store the components we need to construct them.
-				std::map<Instruction*, std::tuple<Type*, Value*>> alloca_replacements;
-				std::map<GetElementPtrInst*, std::tuple<Type *, std::vector<Value*>>> gep_replacements;
+				AllocaMap alloca_replacements;
+				GepMap gep_replacements;
+				BitcastMap bitcast_replacements;
+				LoadMap load_replacements;
 
 				for (auto &bb : func) {
 					for (auto &inst : bb) {
 						if (auto *gep_inst = dyn_cast<GetElementPtrInst>(&inst))
 						{
-							auto src_type = gep_inst->getSourceElementType();
-							ArrayType* arr_type = nullptr;
-							// Array type? no problem. we can just reason over the element type!
-							if (auto *src_arr_type = dyn_cast<ArrayType>(src_type))
-							{
-								arr_type = src_arr_type;
-								if (src_arr_type->getElementType()->isStructTy())
-								{
-									src_type = src_arr_type->getElementType();
-								}
-							}
-							
-							// In this case, we know the GEP refers to a struct type that will be inflated, so we should update its offset (and type).
-							if (struct_mapping.count(src_type) > 0)
-							{
-								std::vector<Value*> replaced_indices;
-								int cnt = 0;
-								for (auto &idx: gep_inst->indices())
-								{
-									if (arr_type)
-									{
-										//Then, we can just push back the index immediately, because we don't insert redzones between array elements.
-										replaced_indices.push_back(idx);
-									}
-									else if (auto *const_int = dyn_cast<ConstantInt>(idx))
-									{
-										// For a singular struct access, the first index is always zero, whereas the second index is the field index.
-										if (cnt == 1)
-										{
-											replaced_indices.push_back(ConstantInt::get(context, const_int->getValue() * 2));
-										}
-										else
-										{
-											replaced_indices.push_back(const_int);
-										}
-									}
-									else {
-										// NOTE: if we practically hit this, it requires runtime multiplication of two. not very clean.. but it should work.
-										outs() << "ERROR: unknown index type at:";
-										gep_inst->print(outs());
-										outs() << " - ";
-										idx->print(outs());
-										outs() << "\n";
-										abort();
-									}
-									cnt += 1;
-								}
-								Type* res_type = nullptr;
-								// we are now done reasoning about the element type, so turn it back into an array type if that is what we started with.
-								if (arr_type)
-								{
-									res_type = ArrayType::get(struct_mapping[src_type]->inflatedType, arr_type->getArrayNumElements());
-								}
-								else 
-								{
-									res_type = struct_mapping[src_type]->inflatedType;
-								}
-								gep_replacements[gep_inst] = std::make_tuple(
-									res_type,
-									replaced_indices
-								);
-							}
-							else
-							{
-								AssertNonStructType(src_type);
-							}
+							handle_gep(gep_inst, gep_replacements, context);
 						}
 						else if (auto *alloca_inst = dyn_cast<AllocaInst>(&inst))
 						{
-							auto alloc_type = alloca_inst->getAllocatedType();
-							// If this is the case, we know the struct type and can inflate it.
-							if (struct_mapping.count(alloc_type) > 0)
-							{
-								alloca_replacements[alloca_inst] = std::make_tuple(struct_mapping[alloc_type]->inflatedType, nullptr);
-							}
-							else if (auto *alloc_arr_type = dyn_cast<ArrayType>(alloc_type))
-							{
-								// Here, we have an array of structs.
-								if (struct_mapping.count(alloc_arr_type->getElementType()) > 0)
-								{
-									// So we need to inflate the _element_ type.
-									auto* new_arr_type = ArrayType::get(
-										struct_mapping[alloc_arr_type->getElementType()]->inflatedType,
-										alloc_arr_type->getNumElements()
-									);
-									alloca_replacements[alloca_inst] = std::make_tuple(new_arr_type, alloca_inst->getArraySize());
-								}
-								else 
-								{
-									AssertNonStructType(alloc_arr_type->getElementType());
-								}
-							}
-							else if (auto *ptr_type = dyn_cast<PointerType>(alloc_type))
-							{
-								if (struct_mapping.count(ptr_type->getPointerElementType()) > 0)
-								{
-									outs() << "Found alloc type for pointer to struct:\n";
-									ptr_type->print(outs());
-									outs() << "\n";
-									// TODO: add a replacement alloca instruction with the inflated pointer type here.
-								}
-								else
-								{
-									AssertNonStructType(ptr_type->getPointerElementType());
-								}
-							}
-							else 
-							{
-								AssertNonStructType(alloc_type);
-							}
+							handle_alloca(alloca_inst, alloca_replacements, context, datalayout);
 						}
 						else if (auto *bitcast_instr = dyn_cast<BitCastInst>(&inst))
 						{
-							if (auto *src_type = dyn_cast<PointerType>(bitcast_instr->getSrcTy()))
-							{
-								if (struct_mapping.count(src_type->getPointerElementType()) > 0)
-								{
-									// TODO: update the source type
-									outs() << "Found bitcast instr with source as inflatable struct type:\n";
-									bitcast_instr->print(outs());
-									outs() << "\n";
-								}
-								else
-								{
-									AssertNonStructType(src_type->getPointerElementType());
-								}
-							}
-							if (auto *dest_type = dyn_cast<PointerType>(bitcast_instr->getDestTy()))
-							{
-								if (struct_mapping.count(dest_type->getPointerElementType()) > 0)
-								{
-									// TODO: update the dest type
-									outs() << "Found bitcast instr with dest as inflatable struct type:\n";
-									bitcast_instr->print(outs());
-									outs() << "\n";
-								}
-								else
-								{
-									AssertNonStructType(dest_type->getPointerElementType());
-								}
-							}
+							handle_bitcast(bitcast_instr, bitcast_replacements, context);
 						}
 						else if (auto* load_instr = dyn_cast<LoadInst>(&inst))
 						{
-							auto *load_type = load_instr->getType();
-							if (auto *load_type_ptr = dyn_cast<PointerType>(load_type))
-							{
-								if (struct_mapping.count(load_type_ptr->getPointerElementType()) > 0)
-								{
-									// TODO: then replace the type appropriately.
-									outs() << "Found load instr: ";
-									load_instr->print(outs());
-									outs() << "\n";
-									load_instr->getPointerOperand()->print(outs());
-									outs() << "\n";
-									load_instr->getType()->print(outs());
-									outs() << "\n===\n";
-								}
-								else
-								{
-									AssertNonStructType(load_type_ptr->getPointerElementType());
-								}
-							}
+							handle_load(load_instr, load_replacements, context);
 						}
 						
 						// TODO: store instructions?
 						// not used in the toy examples we have... but perhaps if we dereference a pointer to a struct to the stack it would be present.
 					}
 				}
-				for (const auto& [key, val]: struct_mapping)
-				{
+				
+				for (const auto& [key, val]: struct_mapping) {
 					outs() << val->type->getName() << " has size of " << val->size << " - associated inflated type " << val->inflatedType->getName() << " has size of " << val->inflatedSize << "\n";
 				}
+				
 				IRBuilder<> builder(context);
-				for (const auto& [inst, tup] : alloca_replacements)
-				{
+				for (const auto& [inst, tup] : alloca_replacements) {
 					builder.SetInsertPoint(inst);
 					// Note: the second element will be null for non-arrays.
-					auto *new_alloca_inst = builder.CreateAlloca(std::get<0>(tup), std::get<1>(tup));
-					inst->replaceAllUsesWith(new_alloca_inst);
+					auto *newInst = builder.CreateAlloca(std::get<0>(tup), std::get<1>(tup));
+					inst->replaceAllUsesWith(newInst);
 					inst->eraseFromParent();
 				}
-				for (const auto& [inst, tup] : gep_replacements)
-				{
+
+				for (const auto& [inst, type] : bitcast_replacements) {
+					builder.SetInsertPoint(inst);
+					auto *newInst = builder.CreateBitCast(
+						inst->getOperand(0),
+						type
+					);
+					inst->replaceAllUsesWith(newInst);
+		  	  		inst->eraseFromParent();
+				}
+
+				for (const auto& [inst, type] : load_replacements) {
+					builder.SetInsertPoint(inst);
+					auto *newInst = builder.CreateLoad(
+						type,
+						inst->getPointerOperand()
+					);
+					inst->replaceAllUsesWith(newInst);
+		  	  		inst->eraseFromParent();
+				}
+
+				for (const auto& [inst, tup] : gep_replacements) {
 					builder.SetInsertPoint(inst);
 					auto *newInst = builder.CreateGEP(
 						std::get<0>(tup),
@@ -339,9 +386,10 @@ namespace {
 						ArrayRef<Value*>(std::get<1>(tup))
 					);
 					inst->replaceAllUsesWith(newInst);
-		  	  inst->eraseFromParent();
+		  	  		inst->eraseFromParent();
 				}
 			}
+
 			// TODO:
 			// heap assignment can be done with;
 			// - malloc
@@ -354,16 +402,17 @@ namespace {
 			// then it should:tm: probably work?
 			// difficulty: need to track all bitcasts from i8* to struct* and grab the source to find the actual associated malloc...
 			// and ofc also all bitcasts that turn struct itno i8.
-		  // TODO:
-		  // 1. create runtime functions which allow the tracking of redzone regions (and crashing if accessed)
-		  // 2. generate functions for each struct type to properly create/remove redzones.
-		  // 3. directly after an alloca for a struct type, add the redzones
-		  // 4. directly before the ret, remove the redzones.
-		  // 5. verify internal overflows are now properly detected.
-		  // 6. adapt to external overflows.
-		  // 7. move on to heap structs.
-		  // 8. union types?
-		  return PreservedAnalyses::all();
+			
+			// TODO:
+			// 1. create runtime functions which allow the tracking of redzone regions (and crashing if accessed)
+			// 2. generate functions for each struct type to properly create/remove redzones.
+			// 3. directly after an alloca for a struct type, add the redzones
+			// 4. directly before the ret, remove the redzones.
+			// 5. verify internal overflows are now properly detected.
+			// 6. adapt to external overflows.
+			// 7. move on to heap structs.
+			// 8. union types?
+		  	return PreservedAnalyses::all();
 		}
 	};
 }
