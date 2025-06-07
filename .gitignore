@@ -13,3 +13,5 @@ out/
 test/*
 !test/*.c
 !test/*.sh
+
+**/*.gdb_history
