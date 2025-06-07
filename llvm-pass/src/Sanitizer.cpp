@@ -241,7 +241,7 @@ namespace {
 		}
 
 		void handle_bitcast(BitCastInst *bitcast_inst, BitcastMap &bitcast_replacements, LLVMContext &context) {
-			// replace all uses of other insts will take care of src type already
+			// Replace all uses of other insts will take care of src type already.
 			if (auto *dest_type = dyn_cast<PointerType>(bitcast_inst->getDestTy()))
 			{
 				if (struct_mapping.count(dest_type->getPointerElementType()) == 0)
@@ -254,22 +254,30 @@ namespace {
 				auto *call_inst = dyn_cast<CallInst>(bitcast_inst->getOperand(0));
 				if (isa<PointerType>(bitcast_inst->getSrcTy()) && call_inst && call_inst->getCalledFunction())
 				{
-					IRBuilder<> builder(call_inst);
-					// TODO: change from startswith to ensuring its exactly equal?
-					if (call_inst->getCalledFunction()->getName().startswith("malloc"))
+					// Lambda as the code below is practically identical for all three cases.
+					auto update_size = [&](size_t i) {
+						if (auto *const_int = dyn_cast<ConstantInt>(call_inst->getArgOperand(i)))
+						{
+							// Take the old malloc size, divide it by the original struct size, and multiply it by the
+							// inflated struct size to handle arrays of structs.
+							auto struct_info = struct_mapping[dest_type->getPointerElementType()];
+							auto count = const_int->getValue().udiv(struct_info->size);
+							auto *new_size = ConstantInt::get(call_inst->getArgOperand(i)->getType(), 
+								struct_info->inflatedSize * count);
+							call_inst->setArgOperand(i, new_size);
+						}
+					};
+					
+					if (call_inst->getCalledFunction()->getName().equals("malloc"))
 					{
 						// If malloc, we need to update the first argument to the inflated size.
-						Value *new_size = ConstantInt::get(call_inst->getArgOperand(0)->getType(), 
-							struct_mapping[dest_type->getPointerElementType()]->inflatedSize);
-						call_inst->setArgOperand(0, new_size);
+						update_size(0);
 					}
-					else if (call_inst->getCalledFunction()->getName().startswith("calloc")
-						|| call_inst->getCalledFunction()->getName().startswith("realloc"))
+					else if (call_inst->getCalledFunction()->getName().equals("calloc")
+						|| call_inst->getCalledFunction()->getName().equals("realloc"))
 					{
 						// If calloc or realloc, we need to update the second argument to the inflated size.
-						Value *new_size = ConstantInt::get(call_inst->getArgOperand(1)->getType(), 
-							struct_mapping[dest_type->getPointerElementType()]->inflatedSize);
-						call_inst->setArgOperand(1, new_size);
+						update_size(1);
 					}
 				}
 
@@ -299,23 +307,24 @@ namespace {
 			auto datalayout = M.getDataLayout();
 			auto &context = M.getContext();
 			
-			// Iterate over all struct types. I believe this one does NOT yet deal with external struct definitions (header files even, perhaps? certainly not libraries)
+			// Iterate over all struct types. I believe this one does NOT yet deal with external struct definitions
+			// (header files even, perhaps? certainly not libraries)
 			for (auto st : M.getIdentifiedStructTypes()) {
 				auto si = WalkStruct(st, datalayout, context);
 				struct_mapping[st] = si;
 			}
 
 			for (auto &func : M) {
-				// Then it is an external function, and must be linked.
-				// We can't instrument this - though it is probably interesting in a later stage for inflating/deflating structs.
+				// Then it is an external function, and must be linked. We can't instrument this - though it is probably
+				// interesting in a later stage for inflating/deflating structs.
 				if (func.isDeclaration())
 				{
 					continue;
 				}
-				// Here, we store instructions and the replacements they will get.
-				// This construction is necessary because doing so invalidates existing iterators, so we cannot do it inside the loop.
-				// Additionally, note that it is not really feasible to directly store the replacing instructions, as they have to already be inserted to exist.
-				// Thus, we store the components we need to construct them.
+				// Here, we store instructions and the replacements they will get. This construction is necessary
+				// because doing so invalidates existing iterators, so we cannot do it inside the loop.
+				// Additionally, note that it is not really feasible to directly store the replacing instructions, as
+				// they have to already be inserted to exist. Thus, we store the components we need to construct them.
 				AllocaMap alloca_replacements;
 				GepMap gep_replacements;
 				BitcastMap bitcast_replacements;
@@ -341,7 +350,8 @@ namespace {
 						}
 						
 						// TODO: store instructions?
-						// not used in the toy examples we have... but perhaps if we dereference a pointer to a struct to the stack it would be present.
+						// not used in the toy examples we have... but perhaps if we dereference a pointer to a struct
+						// to the stack it would be present.
 					}
 				}
 				
@@ -361,7 +371,7 @@ namespace {
 						type
 					);
 					inst->replaceAllUsesWith(newInst);
-  	  		inst->eraseFromParent();
+  	  				inst->eraseFromParent();
 				}
 
 				for (const auto& [inst, type] : load_replacements) {
@@ -371,20 +381,22 @@ namespace {
 						inst->getPointerOperand()
 					);
 					inst->replaceAllUsesWith(newInst);
-  	  		inst->eraseFromParent();
+  	  				inst->eraseFromParent();
 				}
 
 				for (const auto& [inst, tup] : gep_replacements) {
 					builder.SetInsertPoint(inst);
 					auto *newInst = builder.CreateGEP(
 						std::get<0>(tup),
-						// NOTE: we _cannot_ move this to the other loop, because this gets altered by the alloca instruction replacements!
+						// NOTE: we _cannot_ move this to the other loop, because this gets altered by the alloca
+						// instruction replacements!
 						inst->getPointerOperand(),
-						// NOTE 2: some internal llvm magic is happening with arrayref; doing it in the prior loop gives strange failures.
+						// NOTE 2: some internal llvm magic is happening with arrayref; doing it in the prior loop gives
+						// strange failures.
 						ArrayRef<Value*>(std::get<1>(tup))
 					);
 					inst->replaceAllUsesWith(newInst);
-  	  		inst->eraseFromParent();
+  	  				inst->eraseFromParent();
 				}
 			}
 			// TODO:
@@ -408,12 +420,12 @@ llvmGetPassPluginInfo() {
           [](PassBuilder &PB) {
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, ModulePassManager &PM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "structzone-sanitizer") {
-                    PM.addPass(StructZoneSanitizer());
-                    return true;
-                  }
-                  return false;
+                   	ArrayRef<PassBuilder::PipelineElement>) {
+                  	if (Name == "structzone-sanitizer") {
+                    	PM.addPass(StructZoneSanitizer());
+                    	return true;
+                  	}
+                  	return false;
                 });
           }};
 }
