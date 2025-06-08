@@ -28,4 +28,4 @@ opt -load-pass-plugin=$pass_dir"/bin/Sanitizer.so" -S -passes=structzone-sanitiz
 # Since this is for testing purposes, we aren't going to remove the IR files.
 
 # And then compile that llvm IR with the sanitation pass enabled.
-clang $1".out.ll" -o $1 -g -fstandalone-debug -L$runtime_dir -l:Runtime.a -v
+clang $1".out.ll" -o $1 -g -fstandalone-debug -L$runtime_dir -l:Runtime.a -v -lm -lstdc++
