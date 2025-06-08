@@ -146,7 +146,9 @@ namespace {
 				int cnt = 0;
 				for (auto &idx: gep_inst->indices())
 				{
-					if (arr_type)
+					// Note: gep instructions with 2 operands are used for array access.
+					// this pattern is present in heap arrays, since those are accessed as pointers.
+					if (arr_type || gep_inst->getNumOperands() != 3)
 					{
 						//Then, we can just push back the index immediately, because we don't insert redzones between array elements.
 						replaced_indices.push_back(idx);
@@ -164,8 +166,6 @@ namespace {
 						}
 					}
 					else {
-						// TODO: in heap arrays of structs, we get sign extensions on a gep's second index, and it is seen as an array type because the source type is Simple*.
-						// so we need to distinguish those cases.
 						// NOTE: if we practically hit this, it requires runtime multiplication of two. not very clean.. but it should work.
 						outs() << "ERROR: unknown index type at:";
 						gep_inst->print(outs());
@@ -265,6 +265,16 @@ namespace {
 							auto *new_size = ConstantInt::get(call_inst->getArgOperand(i)->getType(), 
 								struct_info->inflatedSize * count);
 							call_inst->setArgOperand(i, new_size);
+						}
+						else {
+							// Note: if we hit this, then (m/re/c)alloc are getting a non-constant size parameter.
+							// i dont expect this to happen, but if it does, it should error out for now so we can ensure its sane to add support for it.
+							outs() << "ERROR: unknown size type at:";
+							call_inst->print(outs());
+							outs() << " - ";
+							call_inst->getArgOperand(i)->print(outs());
+							outs() << "\n";
+							abort();
 						}
 					};
 					
