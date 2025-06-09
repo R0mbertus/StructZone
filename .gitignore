@@ -16,3 +16,6 @@ test/*
 
 **/*.gdb_history
 **/.vscode/*
+
+runtime/bin/*
+runtime/llvm/*
