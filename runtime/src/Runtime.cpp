@@ -11,7 +11,7 @@
 
 #define max(a, b) ((a > b) ? a : b)
 
-// #define DEBUG_PRINT_ENABLE
+#define DEBUG_PRINT_ENABLE
 
 #ifdef DEBUG_PRINT_ENABLE
 #define DBG(x) x
