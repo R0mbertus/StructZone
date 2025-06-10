@@ -23,10 +23,11 @@ namespace
 			std::vector<FieldInfo> fields;
 			// The fields, but with redzone types inserted in between them.
 			std::vector<Type *> mappedFields;
-
+			std::vector<size_t> redzone_offsets;
 			std::map<size_t, size_t> offset_mapping;
 
 			size_t base_offset = 0;
+			outs() << "inflating struct " << s->getName() << "\n";
 			for (auto fieldType : s->elements())
 			{
 				FieldInfo field = {
@@ -49,6 +50,7 @@ namespace
 				}
 				// and an array of chars with a given size to store the redzone in.
 				mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
+				redzone_offsets.push_back(mappedFields.size() - 1);
 				// Finally, we store the difference in offsets that accumulates due to redzones.
 				offset_mapping[base_offset] = base_offset * 2;
 				base_offset += 1;
@@ -56,6 +58,7 @@ namespace
 			// The last redzone (at least for now) is superfluous since it does not protect against internal overflows.
 			// when we add external overflow guards, we can simply remove this and add one redzone before we loop over the elements.
 			mappedFields.pop_back();
+			redzone_offsets.pop_back();
 
 			// If the inflated type doesn't exist yet, create it. For recursion, it will already exist, so lets not create duplicates.
 			auto inflated_type = StructType::getTypeByName(ctx, s->getName().str() + ".inflated");
@@ -71,6 +74,7 @@ namespace
 				fields,
 				dl.getTypeAllocSize(s),
 				offset_mapping,
+				redzone_offsets
 			};
 			return std::make_shared<StructInfo>(si);
 		}

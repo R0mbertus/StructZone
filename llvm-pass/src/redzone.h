@@ -32,6 +32,7 @@ struct StructInfo
     size_t size;
     // A mapping from offsets in the unmapped type into the mapped type.
     std::map<size_t, size_t> offsetMapping;
+    std::vector<size_t> redzone_offsets;
 };
 
 void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>>* info, Module &M);
