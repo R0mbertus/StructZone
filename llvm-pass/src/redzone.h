@@ -34,4 +34,4 @@ struct StructInfo
     std::map<size_t, size_t> offsetMapping;
 };
 
-void setup_redzone_checks(std::map<Type *, std::shared_ptr<StructInfo>>* info, Module &M);
+void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>>* info, Module &M);

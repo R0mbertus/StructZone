@@ -243,7 +243,7 @@ namespace
 			// (i.e., whenever a load happens whose source is a getelementptr associated to a struct instance, first insert a call to a function which crashes if the memory is a redzone)
 			// 5. verify the program now crashes on internal overflow, but not on the safe variant.
       // 6. move on to union types. then after, external overflows.
-      setup_redzone_checks(&struct_mapping, M);
+      setupRedzoneChecks(&struct_mapping, M);
 			outs() << "done!\n";
 			return PreservedAnalyses::none(); //TODO: check.
 		}
