@@ -1,7 +1,7 @@
 use std::{path::Path, process::Command};
 
 fn main() {
-    let pass_script = Path::new("llvm-pass/compile_pass.sh");
+    let pass_script = Path::new("llvm-pass/");
     if !pass_script.exists() {
         panic!(
             "cargo:error=LLVM pass compilation script not found at {}",
@@ -9,10 +9,10 @@ fn main() {
         );
     }
 
-    let status = Command::new("bash")
-        .arg(pass_script)
+    let status = Command::new("make")
+        .arg(format!("-C {}", pass_script.display()))
         .status()
-        .expect("Failed to run compile_pass.sh");
+        .expect("Failed to compile LLVM pass");
     if !status.success() {
         panic!("Failed to compile LLVM pass");
     }
