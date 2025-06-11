@@ -64,7 +64,6 @@ namespace {
 				abort();
 			}
 		}
-		
 		// Walks over a struct to provide information on its fields.
 		// If this struct contains another struct, will recurse.
 		std::shared_ptr<StructInfo> WalkStruct(StructType *s, DataLayout &dl, LLVMContext &ctx)
@@ -72,18 +71,19 @@ namespace {
 			// Metadata info on each field of the struct
 			std::vector<FieldInfo> fields;
 			// The fields, but with redzone types inserted in between them.
-			std::vector<Type*> mappedFields;
-			
+			std::vector<Type *> mappedFields;
+			std::vector<size_t> redzone_offsets;
 			std::map<size_t, size_t> offset_mapping;
-			
+
 			size_t base_offset = 0;
+			outs() << "inflating struct " << s->getName() << "\n";
 			for (auto fieldType : s->elements())
 			{
 				FieldInfo field = {
 					nullptr,
 					dl.getTypeAllocSize(fieldType),
 				};
-				if (auto* structType = dyn_cast<StructType>(fieldType))
+				if (auto *structType = dyn_cast<StructType>(fieldType))
 				{
 					field.structInfo = WalkStruct(structType, dl, ctx);
 				}
@@ -99,6 +99,7 @@ namespace {
 				}
 				// and an array of chars with a given size to store the redzone in.
 				mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
+				redzone_offsets.push_back(mappedFields.size() - 1);
 				// Finally, we store the difference in offsets that accumulates due to redzones.
 				offset_mapping[base_offset] = base_offset * 2;
 				base_offset += 1;
@@ -106,15 +107,16 @@ namespace {
 			// The last redzone (at least for now) is superfluous since it does not protect against internal overflows.
 			// when we add external overflow guards, we can simply remove this and add one redzone before we loop over the elements.
 			mappedFields.pop_back();
-			
+			redzone_offsets.pop_back();
+
 			// If the inflated type doesn't exist yet, create it. For recursion, it will already exist, so lets not create duplicates.
 			auto inflated_type = StructType::getTypeByName(ctx, s->getName().str() + ".inflated");
 			if (inflated_type == NULL)
 			{
 				inflated_type = StructType::create(ctx, s->getName().str() + ".inflated");
-				inflated_type->setBody(ArrayRef<Type*>(mappedFields));
+				inflated_type->setBody(ArrayRef<Type *>(mappedFields));
 			}
-			
+
 			struct StructInfo si = {
 				s,
 				inflated_type,
@@ -122,6 +124,7 @@ namespace {
 				dl.getTypeAllocSize(s),
 				dl.getTypeAllocSize(inflated_type),
 				offset_mapping,
+				redzone_offsets
 			};
 			return std::make_shared<StructInfo>(si);
 		}
@@ -340,8 +343,10 @@ namespace {
 				BitcastMap bitcast_replacements;
 				LoadMap load_replacements;
 
-				for (auto &bb : func) {
-					for (auto &inst : bb) {
+				for (auto &bb : func)
+				{
+					for (auto &inst : bb)
+					{
 						if (auto *gep_inst = dyn_cast<GetElementPtrInst>(&inst))
 						{
 							handle_gep(gep_inst, gep_replacements, context);
@@ -409,16 +414,17 @@ namespace {
   	  				inst->eraseFromParent();
 				}
 			}
-			// TODO:
-			// 1. create runtime functions which allow the tracking of redzone regions (and crashing if accessed)
-			// 2. generate functions for each struct type to properly create/remove redzones.
-			// 3. directly after an alloca for a struct type, add the redzones
-			// 4. directly before the ret, remove the redzones.
-			// 5. verify internal overflows are now properly detected.
-			// 6. adapt to external overflows.
-			// 7. move on to heap structs.
-			// 8. union types?
-		  	return PreservedAnalyses::all();
+			
+			// NOTE: what redzone type do we want to use? i.e., what way do we check if one is hit?
+			// TODO: from within the pass:
+			// 3. investigate what instructions are practically used to access the structs. (load, store?)
+			// 4. add sanitation checks there, for _internal overflow_.
+			// (i.e., whenever a load happens whose source is a getelementptr associated to a struct instance, first insert a call to a function which crashes if the memory is a redzone)
+			// 5. verify the program now crashes on internal overflow, but not on the safe variant.
+      // 6. move on to union types. then after, external overflows.
+      setupRedzoneChecks(&struct_mapping, M);
+			outs() << "done!\n";
+			return PreservedAnalyses::none(); //TODO: check.
 		}
 	};
 }
@@ -439,4 +445,3 @@ llvmGetPassPluginInfo() {
                 });
           }};
 }
-

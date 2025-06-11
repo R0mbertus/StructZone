@@ -6,7 +6,10 @@ RUN curl https://sh.rustup.rs -sSf > rustup_install.sh
 RUN echo 1 | bash ./rustup_install.sh -y
 RUN apt-get install -y clang-14
 RUN apt-get install -y llvm-14-dev
-RUN apt-get install -y g++ make automake
+RUN apt-get install -y g++ make automake gdb wget xz-utils
+RUN echo "set auto-load safe-path /" > /root/.gdbinit
+RUN curl -qsL 'https://install.pwndbg.re' | sh -s -- -t pwndbg-gdb
+
 
 RUN ln -s /usr/include/llvm14/llvm /usr/include/llvm
 RUN ln -s /usr/include/llvm14/llvm-c /usr/include/llvm-c

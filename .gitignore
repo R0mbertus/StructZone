@@ -13,3 +13,9 @@ out/
 test/*
 !test/*.c
 !test/*.sh
+
+**/*.gdb_history
+**/.vscode/*
+
+runtime/bin/*
+runtime/llvm/*
