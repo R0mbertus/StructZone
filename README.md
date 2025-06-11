@@ -2,21 +2,25 @@
 
 Fuzzing project that attempts to detect struct overflows.
 
-## Building
+## Dependencies & Environment
 
-### Manual
+For the best experience, run the docker container using `docker compose up`. If you instead want to
+ run the project locally, install the dependencies listed in the [Dockerfile](./docker/Dockerfile). 
 
-First, install [LibAFLs dependencies](https://github.com/AFLplusplus/LibAFL/tree/main?tab=readme-ov-file#building-and-installing),
- and then build and install the LibAFL provided in [lib/LibAFl](./lib/LibAFL/) using cargo:
+### Commits
 
-```sh
-cargo build --release --manifest-path=lib/LibAFL/Cargo.toml
-```
+When commiting, a `clang-format` hook runs, as taken from [here](https://github.com/barisione/clang-format-hooks).
+ This, however, stops the GUI versions of working (usually), so either stick to the CLI git, or
+ check the linked repo to see their work around.
 
-Then, to build and run the project `rust`, `llvm`, and `just` need to be installed. Then, simply
- just run `just run <target>`.
+## Running
 
-## Notes
+### Tests
 
-The current fuzzer is the `fuzzbench` fuzzer found in [fuzzers/inproccess/fuzzbench](./lib/LibAFL/fuzzers/inprocess/fuzzbench/).
- For details about the workings of that fuzzer see the readme there.
+There's a directory `test` which contains toy examples that showcase different types of usages of
+ structs (and overflows on them). To run them, run `./compile-test.sh <filename without extension>`.
+ TODO: update once testing scripts are complete
+
+### Spec Benchmark
+
+TODO: when spec comes in write this

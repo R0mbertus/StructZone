@@ -1,7 +1,7 @@
 services:
   dev_cont:
     build:
-      context: .
+      context: docker/
     volumes:
       - .:/src:z
     working_dir: /src

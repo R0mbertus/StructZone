@@ -3,7 +3,7 @@
 runtime_dir="../runtime/"
 runtime_dir_bin=$runtime_dir"bin/"
 runtime_llvm_dir=$runtime_dir"llvm/"
-pass_dir="../llvm-pass"
+pass_dir="../llvm-pass/"
 
 set -e
 

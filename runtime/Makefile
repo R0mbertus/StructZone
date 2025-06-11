@@ -11,6 +11,12 @@ BIN_PATH := bin
 OBJ_PATH := obj
 SRC_PATH := src
 DBG_PATH := debug
+LLVM_PATH := llvm
+
+default: makedir all
+
+makedir:
+	@mkdir -p $(BIN_PATH) $(OBJ_PATH) $(DBG_PATH) $(LLVM_PATH)
 
 all: bin/Runtime.a llvm/Runtime.ll bin/runtimetest
 
