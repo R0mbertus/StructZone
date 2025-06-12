@@ -40,9 +40,10 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         std::vector<Type *> mappedFields;
         std::vector<size_t> redzone_offsets;
         std::map<size_t, size_t> offset_mapping;
-
+        // We add a redzone before the first field, so that we can detect underflows.
+        redzone_offsets.push_back(mappedFields.size());
+        mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
         size_t base_offset = 0;
-        outs() << "inflating struct " << s->getName() << "\n";
         for (auto fieldType : s->elements()) {
             FieldInfo field = {
                 fieldType,
@@ -61,18 +62,12 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 mappedFields.push_back(fieldType);
             }
             // and an array of chars with a given size to store the redzone in.
+            redzone_offsets.push_back(mappedFields.size());
             mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
-            redzone_offsets.push_back(mappedFields.size() - 1);
             // Finally, we store the difference in offsets that accumulates due to redzones.
-            offset_mapping[base_offset] = base_offset * 2;
+            offset_mapping[base_offset] = base_offset * 2 + 1;
             base_offset += 1;
         }
-        // The last redzone (at least for now) is superfluous since it does not protect against
-        // internal overflows. when we add external overflow guards, we can simply remove this and
-        // add one redzone before we loop over the elements.
-        mappedFields.pop_back();
-        redzone_offsets.pop_back();
-
         // If the inflated type doesn't exist yet, create it. For recursion, it will already exist,
         // so lets not create duplicates.
         auto inflated_type = StructType::getTypeByName(ctx, s->getName().str() + ".inflated");
@@ -116,7 +111,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             else if (struct_mapping.count(curr_type) > 0) {
                 if (auto *const_int = dyn_cast<ConstantInt>(idx)) {
                     replaced_indices.push_back(
-                        ConstantInt::get(context, const_int->getValue() * 2));
+                        ConstantInt::get(context, const_int->getValue() * 2 + 1));
                     auto si = struct_mapping[curr_type];
                     // Assuming zero extension is fine, because a negative field index is not
                     // semantically correct.
@@ -150,9 +145,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // Array type? no problem. we can just reason over the element type!
         if (auto *src_arr_type = dyn_cast<ArrayType>(src_type)) {
             arr_type = src_arr_type;
-            if (src_arr_type->getElementType()->isStructTy()) {
-                src_type = src_arr_type->getElementType();
-            }
+            src_type = src_arr_type->getElementType();
         }
 
         // In this case, we know the GEP refers to a struct type that will be inflated, so we should
@@ -312,10 +305,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     } else if (auto *load_instr = dyn_cast<LoadInst>(&inst)) {
                         handle_load(load_instr, load_replacements, context);
                     }
-
-                    // TODO: store instructions?
-                    // not used in the toy examples we have... but perhaps if we dereference a
-                    // pointer to a struct to the stack it would be present.
                 }
             }
 
