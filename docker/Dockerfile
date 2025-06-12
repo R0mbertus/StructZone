@@ -10,5 +10,6 @@ ENV PATH="/root/.cargo/bin:/usr/lib/llvm-14/bin:${PATH}"
 
 RUN echo "set auto-load safe-path /" > /root/.gdbinit
 RUN curl -qsL 'https://install.pwndbg.re' | sh -s -- -t pwndbg-gdb
+RUN apt-get install -y python3
 
 CMD /bin/sh -c /src/docker/entrypoint.sh
