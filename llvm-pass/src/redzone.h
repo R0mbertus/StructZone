@@ -12,6 +12,8 @@ const size_t REDZONE_SIZE = 1;
 struct StructInfo;
 
 struct FieldInfo {
+    // The type of the field.
+    Type *type;
     // If the field this info represents is a struct type, will contain the StructInfo for this.
     // Otherwise, will be NULL.
     std::shared_ptr<StructInfo> structInfo;

@@ -40,11 +40,13 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         std::vector<Type *> mappedFields;
         std::vector<size_t> redzone_offsets;
         std::map<size_t, size_t> offset_mapping;
-
+        // We add a redzone before the first field, so that we can detect underflows.
+        redzone_offsets.push_back(mappedFields.size());
+        mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
         size_t base_offset = 0;
-        outs() << "inflating struct " << s->getName() << "\n";
         for (auto fieldType : s->elements()) {
             FieldInfo field = {
+                fieldType,
                 nullptr,
                 dl.getTypeAllocSize(fieldType),
             };
@@ -60,18 +62,12 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 mappedFields.push_back(fieldType);
             }
             // and an array of chars with a given size to store the redzone in.
+            redzone_offsets.push_back(mappedFields.size());
             mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
-            redzone_offsets.push_back(mappedFields.size() - 1);
             // Finally, we store the difference in offsets that accumulates due to redzones.
-            offset_mapping[base_offset] = base_offset * 2;
+            offset_mapping[base_offset] = base_offset * 2 + 1;
             base_offset += 1;
         }
-        // The last redzone (at least for now) is superfluous since it does not protect against
-        // internal overflows. when we add external overflow guards, we can simply remove this and
-        // add one redzone before we loop over the elements.
-        mappedFields.pop_back();
-        redzone_offsets.pop_back();
-
         // If the inflated type doesn't exist yet, create it. For recursion, it will already exist,
         // so lets not create duplicates.
         auto inflated_type = StructType::getTypeByName(ctx, s->getName().str() + ".inflated");
@@ -92,39 +88,39 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
     void handle_gep(GetElementPtrInst *gep_inst, GepMap &gep_replacements, LLVMContext &context) {
         auto src_type = gep_inst->getSourceElementType();
-        ArrayType *arr_type = nullptr;
-        // Array type? no problem. we can just reason over the element type!
-        if (auto *src_arr_type = dyn_cast<ArrayType>(src_type)) {
-            arr_type = src_arr_type;
-            if (src_arr_type->getElementType()->isStructTy()) {
-                src_type = src_arr_type->getElementType();
+        int count = 0;
+        std::vector<Value *> replaced_indices;
+        auto curr_type = gep_inst->getPointerOperand()->getType();
+        // We walk over all indices, keeping track of the current type. This allows us to detect all
+        // shapes of struct access that might require offset changing.
+        for (auto &idx : gep_inst->indices()) {
+            // Arrays do not require index replacement, and the next index will refer to the element
+            // type.
+            if (auto *arr_type = dyn_cast<ArrayType>(curr_type)) {
+                replaced_indices.push_back(idx);
+                curr_type = arr_type->getElementType();
             }
-        }
-
-        // In this case, we know the GEP refers to a struct type that will be inflated, so we should
-        // update its offset (and type).
-        if (struct_mapping.count(src_type) > 0) {
-            std::vector<Value *> replaced_indices;
-            int cnt = 0;
-            for (auto &idx : gep_inst->indices()) {
-                // Note: gep instructions with 2 operands are used for array access.
-                // this pattern is present in heap arrays, since those are accessed as pointers.
-                if (arr_type || gep_inst->getNumOperands() != 3) {
-                    // Then, we can just push back the index immediately, because we don't insert
-                    // redzones between array elements.
-                    replaced_indices.push_back(idx);
-                } else if (auto *const_int = dyn_cast<ConstantInt>(idx)) {
-                    // For a singular struct access, the first index is always zero, whereas the
-                    // second index is the field index.
-                    if (cnt == 1) {
-                        replaced_indices.push_back(
-                            ConstantInt::get(context, const_int->getValue() * 2));
-                    } else {
-                        replaced_indices.push_back(const_int);
-                    }
+            // Pointers do not require index replacement, and the next index will refer to the type
+            // that is pointed to.
+            else if (auto *ptr_type = dyn_cast<PointerType>(curr_type)) {
+                replaced_indices.push_back(idx);
+                curr_type = ptr_type->getPointerElementType();
+            }
+            // Struct types require index replacement. Additionally, the next type is the type of
+            // the field that is pointed to.
+            else if (struct_mapping.count(curr_type) > 0) {
+                if (auto *const_int = dyn_cast<ConstantInt>(idx)) {
+                    replaced_indices.push_back(
+                        ConstantInt::get(context, const_int->getValue() * 2 + 1));
+                    auto si = struct_mapping[curr_type];
+                    // Assuming zero extension is fine, because a negative field index is not
+                    // semantically correct.
+                    curr_type = si->fields.at(const_int->getValue().getZExtValue()).type;
                 } else {
-                    // NOTE: if we practically hit this, it requires runtime multiplication of two.
-                    // not very clean.. but it should work.
+                    // This one is conceptually... weird. A non-constant index really only makes
+                    // sense on something like an array, which has a homogeneous element type. But
+                    // if it is a struct, you no longer have that. Therefore, I assume this
+                    // should never happen.
                     outs() << "ERROR: unknown index type at:";
                     gep_inst->print(outs());
                     outs() << " - ";
@@ -132,8 +128,29 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     outs() << "\n";
                     abort();
                 }
-                cnt += 1;
             }
+            // We should not encounter unknown type kinds here.
+            // If we do, that means we cannot complete the walk over the indices, so we error out.
+            else {
+                outs() << "Unknown type ";
+                curr_type->print(outs());
+                outs() << ". This implies either an unknown type _kind_, or an uninflated struct "
+                          "type.\n";
+                abort();
+            }
+            count += 1;
+        }
+        
+        ArrayType *arr_type = nullptr;
+        // Array type? no problem. we can just reason over the element type!
+        if (auto *src_arr_type = dyn_cast<ArrayType>(src_type)) {
+            arr_type = src_arr_type;
+            src_type = src_arr_type->getElementType();
+        }
+
+        // In this case, we know the GEP refers to a struct type that will be inflated, so we should
+        // update its offset (and type).
+        if (struct_mapping.count(src_type) > 0) {
             Type *res_type = nullptr;
             // we are now done reasoning about the element type, so turn it back into an array type
             // if that is what we started with.
@@ -288,10 +305,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     } else if (auto *load_instr = dyn_cast<LoadInst>(&inst)) {
                         handle_load(load_instr, load_replacements, context);
                     }
-
-                    // TODO: store instructions?
-                    // not used in the toy examples we have... but perhaps if we dereference a
-                    // pointer to a struct to the stack it would be present.
                 }
             }
 
