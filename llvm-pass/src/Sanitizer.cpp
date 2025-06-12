@@ -45,6 +45,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         outs() << "inflating struct " << s->getName() << "\n";
         for (auto fieldType : s->elements()) {
             FieldInfo field = {
+                fieldType,
                 nullptr,
                 dl.getTypeAllocSize(fieldType),
             };
@@ -92,6 +93,62 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
     void handle_gep(GetElementPtrInst *gep_inst, GepMap &gep_replacements, LLVMContext &context) {
         auto src_type = gep_inst->getSourceElementType();
+        int count = 0;
+        std::vector<Value *> replaced_indices;
+        auto curr_type = gep_inst->getPointerOperand()->getType();
+        // We walk over all indices, keeping track of the current type. This allows us to detect all
+        // shapes of struct access that might require offset changing.
+        for (auto &idx : gep_inst->indices()) {
+            // Arrays do not require index replacement, and the next index will refer to the element
+            // type.
+            if (auto *arr_type = dyn_cast<ArrayType>(curr_type)) {
+                replaced_indices.push_back(idx);
+                curr_type = arr_type->getElementType();
+            }
+            // Pointers do not require index replacement, and the next index will refer to the type
+            // that is pointed to.
+            else if (auto *ptr_type = dyn_cast<PointerType>(curr_type)) {
+                replaced_indices.push_back(idx);
+                curr_type = ptr_type->getPointerElementType();
+            }
+            // Struct types require index replacement. Additionally, the next type is the type of
+            // the field that is pointed to.
+            else if (struct_mapping.count(curr_type) > 0) {
+                if (auto *const_int = dyn_cast<ConstantInt>(idx)) {
+                    replaced_indices.push_back(
+                        ConstantInt::get(context, const_int->getValue() * 2));
+                    auto si = struct_mapping[curr_type];
+                    // Assuming zero extension is fine, because a negative field index is not
+                    // semantically correct.
+                    curr_type = si->fields.at(const_int->getValue().getZExtValue()).type;
+                } else {
+                    // This one is conceptually.. weird. A non-constant index really only makes
+                    // sense on something like an array, which has a homogeneous element type. But
+                    // if it is a struct, you can no longer type that. Therefore, I assume this
+                    // should never happen.
+                    outs() << "ERROR: unknown index type at:";
+                    gep_inst->print(outs());
+                    outs() << " - ";
+                    idx->print(outs());
+                    outs() << "\n";
+                    abort();
+                }
+            }
+            // We should not encounter unknown type kinds here.
+            // If we do, that means we cannot complete the walk over the indices, so we error out.
+            else {
+                outs() << "Unknown type ";
+                curr_type->print(outs());
+                outs() << ". This implies either an unknown type _kind_, or an uninflated struct "
+                          "type.\n";
+                abort();
+            }
+            count += 1;
+        }
+        // TODO: would like to:
+        // 2. make sure we aren't missing cases where we have a gep that starts on a non-inflated
+        // type, but which later accesses it (pointers? arrays are already caught here..)
+        // (pointers? arrays are already caught here..)
         ArrayType *arr_type = nullptr;
         // Array type? no problem. we can just reason over the element type!
         if (auto *src_arr_type = dyn_cast<ArrayType>(src_type)) {
@@ -104,36 +161,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // In this case, we know the GEP refers to a struct type that will be inflated, so we should
         // update its offset (and type).
         if (struct_mapping.count(src_type) > 0) {
-            std::vector<Value *> replaced_indices;
-            int cnt = 0;
-            for (auto &idx : gep_inst->indices()) {
-                // Note: gep instructions with 2 operands are used for array access.
-                // this pattern is present in heap arrays, since those are accessed as pointers.
-                if (arr_type || gep_inst->getNumOperands() != 3) {
-                    // Then, we can just push back the index immediately, because we don't insert
-                    // redzones between array elements.
-                    replaced_indices.push_back(idx);
-                } else if (auto *const_int = dyn_cast<ConstantInt>(idx)) {
-                    // For a singular struct access, the first index is always zero, whereas the
-                    // second index is the field index.
-                    if (cnt == 1) {
-                        replaced_indices.push_back(
-                            ConstantInt::get(context, const_int->getValue() * 2));
-                    } else {
-                        replaced_indices.push_back(const_int);
-                    }
-                } else {
-                    // NOTE: if we practically hit this, it requires runtime multiplication of two.
-                    // not very clean.. but it should work.
-                    outs() << "ERROR: unknown index type at:";
-                    gep_inst->print(outs());
-                    outs() << " - ";
-                    idx->print(outs());
-                    outs() << "\n";
-                    abort();
-                }
-                cnt += 1;
-            }
             Type *res_type = nullptr;
             // we are now done reasoning about the element type, so turn it back into an array type
             // if that is what we started with.
