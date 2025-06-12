@@ -122,9 +122,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     // semantically correct.
                     curr_type = si->fields.at(const_int->getValue().getZExtValue()).type;
                 } else {
-                    // This one is conceptually.. weird. A non-constant index really only makes
+                    // This one is conceptually... weird. A non-constant index really only makes
                     // sense on something like an array, which has a homogeneous element type. But
-                    // if it is a struct, you can no longer type that. Therefore, I assume this
+                    // if it is a struct, you no longer have that. Therefore, I assume this
                     // should never happen.
                     outs() << "ERROR: unknown index type at:";
                     gep_inst->print(outs());
@@ -145,10 +145,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
             count += 1;
         }
-        // TODO: would like to:
-        // 2. make sure we aren't missing cases where we have a gep that starts on a non-inflated
-        // type, but which later accesses it (pointers? arrays are already caught here..)
-        // (pointers? arrays are already caught here..)
+        
         ArrayType *arr_type = nullptr;
         // Array type? no problem. we can just reason over the element type!
         if (auto *src_arr_type = dyn_cast<ArrayType>(src_type)) {
