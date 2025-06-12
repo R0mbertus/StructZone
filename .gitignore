@@ -10,9 +10,9 @@ libafl.log
 in/
 out/
 
-test/*
-!test/*.c
-!test/*.sh
+test/bin/*
+test/llvm-in/*
+test/llvm-out/*
 
 **/*.gdb_history
 **/.vscode/*
