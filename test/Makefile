@@ -15,7 +15,12 @@ RUNTIME_LLVM_DIR=$(RUNTIME_DIR)"llvm/"
 PASS_DIR="../llvm-pass"
 
 # default rule
-default: dirs $(addprefix $(BIN_DIR)/, $(TESTS))
+default: all
+
+check: all
+	python3 ./run_tests.py
+
+all: dirs $(addprefix $(BIN_DIR)/, $(TESTS))
 
 list:
 	@echo $(addprefix $(BIN_DIR)/, $(TESTS))
