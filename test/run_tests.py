@@ -31,13 +31,28 @@ SUCCEEDING_TESTS = [
 
 def run_test():
     for i in FAILING_TESTS + SUCCEEDING_TESTS:
-        exited_normally = sp.run([f"./bin/{i}"], stdout= sp.DEVNULL, stderr=sp.DEVNULL).returncode == 0
+        res = sp.run([f"./bin/{i}"], capture_output = True, text = True)
+        exited_normally = res.returncode == 0
         expected_succ = i in SUCCEEDING_TESTS
         
-        if(exited_normally ^ expected_succ):
-            print(f"{COLORS["KRED"]}[FAILED]{COLORS["KNRM"]} {i}")
-        else:
-            print(f"{COLORS["KGRN"]}[PASSED]{COLORS["KNRM"]} {i}")
+        if exited_normally ^ expected_succ:
+            print(f"{COLORS['KRED'] }[FAILED]{COLORS['KNRM']} {i}")
+            continue;
+        
+        if expected_succ:
+            # Compile the source file with gcc, so that we can check against its unaltered output.
+            test = sp.run(["gcc", f"./src/{i}.c", "-o", f"./bin/{i}.orig"], capture_output = True, text = True)
+            orig_res = sp.run([f"./bin/{i}.orig"], capture_output = True, text = True)
+            if orig_res.stdout != res.stdout:
+                print(f"{COLORS['KRED'] }[FAILED]{COLORS['KNRM']} {i}")
+                print("Exit code is correct, but program behaviour has been altered!")
+                print(f"Expected: \n{orig_res.stdout}\nBut got:\n{res.stdout}")
+                continue
+        elif "ILLEGAL ACCESS AT" not in res.stderr:
+            	print(f"{COLORS['KRED'] }[FAILED]{COLORS['KNRM']} {i}")
+            	print(f"Expected stderr to contain the sanitizer error message, but this did not happen.")
+            	continue
+        print(f"{COLORS['KGRN']}[PASSED]{COLORS['KNRM']} {i}")
         
 
 if __name__ == "__main__":

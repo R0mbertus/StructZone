@@ -239,18 +239,18 @@ void AVLTree::_printTree(Node *root, string indent, bool last)
 {
     if (root != nullptr)
     {
-        std::cout << indent;
+        cerr << indent;
         if (last)
         {
-            std::cout << "R----";
+            cerr << "R----";
             indent += "   ";
         }
         else
         {
-            std::cout << "L----";
+            cerr << "L----";
             indent += "|  ";
         }
-        std::cout << std::hex << root->key << std::endl;
+        cerr << std::hex << root->key << std::endl;
         _printTree(root->left, indent, false);
         _printTree(root->right, indent, true);
     }
@@ -263,29 +263,29 @@ void AVLTree::_printTree(Node *root, string indent, bool last)
  */
 bool AVLTree::_CheckPoison(Node* root, uint64_t probe, uint8_t readWidth, Node* leftPar, Node* rightPar){
     
-    DBG(cout << std::hex << "probe: " << probe << " on node " << (root? root->key : 0);)
+    DBG(cerr << std::hex << "probe: " << probe << " on node " << (root? root->key : 0);)
     
 
     if (root == NULL){
-        // cout << " is null\n";
+        // cerr << " is null\n";
         // return false;
     }
     else if (root->key == probe){
-        DBG(cout << " exact hit";)
+        DBG(cerr << " exact hit";)
         leftPar = root;
     }
     else if (root->key < probe){
-        DBG(cout << " Right\n";)
+        DBG(cerr << " Right\n";)
         return _CheckPoison(root->right, probe, readWidth, root, rightPar);
     }
     else if (root->key > probe){
-        DBG(cout << " Left\n";)
+        DBG(cerr << " Left\n";)
         return _CheckPoison(root->left, probe, readWidth, leftPar, root);
     }
 
     uint64_t leftKey = leftPar != NULL? leftPar->key : 0;
     uint64_t rightKey = rightPar != NULL? rightPar->key : 0;
-    DBG(cout << " left: " << leftKey << " right: " << rightKey;)
+    DBG(cerr << " left: " << leftKey << " right: " << rightKey;)
     
     /**
      * Left parent is the node which is immediately left in the ordering. If null,
@@ -294,15 +294,15 @@ bool AVLTree::_CheckPoison(Node* root, uint64_t probe, uint8_t readWidth, Node* 
      */
     if (leftPar != NULL && (leftPar->key + leftPar->size) > probe)
     {
-        DBG(cout << " first byte hit\n";)
+        DBG(cerr << " first byte hit\n";)
         return true;
     }
     else if (rightPar != NULL && (rightPar->key) < (probe + readWidth))
     {
-        DBG(cout << " partial overflow detected!\n";)
+        DBG(cerr << " partial overflow detected!\n";)
         return true;
     }
-    DBG(cout << " all clear\n";)
+    DBG(cerr << " all clear\n";)
     return false;
 }
 
@@ -372,5 +372,5 @@ void __rdzone_dbg_print(){
 // has internal linkage.
 void test_runtime_link()
 {
-    printf("runtime initalised!\n");
+    cerr << "runtime initislised!\n";
 }
