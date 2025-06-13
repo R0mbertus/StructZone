@@ -13,3 +13,8 @@ llvm-pass_makage:
 
 test_makage:
 	make -C ./test
+
+clean:
+	make -C ./runtime clean
+	make -C ./test clean
+	make -C ./llvm-pass clean
