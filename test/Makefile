@@ -30,20 +30,19 @@ dirs:
 	mkdir -p $(IN_DIR)
 	mkdir -p $(OUT_DIR)
 
+.PRECIOUS: $(IN_DIR)/%.ll
 $(IN_DIR)/%.ll: $(SRC_DIR)/%.c
 	clang -S -emit-llvm $< -o $@
 
+.PRECIOUS: $(OUT_DIR)/%.out.ll
 $(OUT_DIR)/%.out.ll: $(IN_DIR)/%.ll
 	opt -load-pass-plugin=$(PASS_DIR)"/bin/Sanitizer.so" -S -passes=structzone-sanitizer $< -o $@
 
 $(BIN_DIR)/%: $(OUT_DIR)/%.out.ll
-	clang $< -o $@ -g -fstandalone-debug -L$(RUNTIME_BIN_DIR) -l:Runtime.a -v -lm -lstdc++
+	clang $< -o $@ -g -fstandalone-debug -L$(RUNTIME_BIN_DIR) -l:Runtime.a -lm -lstdc++
 
-
-.PHONY: all
-all: $(TARGET)
 
 .PHONY: clean
 clean:
-	@echo rm *.ll
-	@rm -f *.ll
+	@echo rm *.ll ./bin/*
+	@rm -f *.ll ./bin/*
