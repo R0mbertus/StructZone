@@ -39,7 +39,7 @@ $(OUT_DIR)/%.out.ll: $(IN_DIR)/%.ll
 	opt -load-pass-plugin=$(PASS_DIR)"/bin/Sanitizer.so" -S -passes="function(mem2reg),structzone-sanitizer" $< -o $@
 
 $(BIN_DIR)/%: $(OUT_DIR)/%.out.ll
-	clang $< -o $@ -g -fstandalone-debug -L$(RUNTIME_BIN_DIR) -l:Runtime.a -lm -lstdc++ 
+	clang $< -o $@ -g -fstandalone-debug -L$(RUNTIME_BIN_DIR) -l:Runtime.a -lm -lstdc++
 
 
 .PHONY: clean
