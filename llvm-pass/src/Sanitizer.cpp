@@ -345,19 +345,16 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 inst->eraseFromParent();
             }
         }
-
-        // NOTE: what redzone type do we want to use? i.e., what way do we check if one is hit?
-        // TODO: from within the pass:
-        // 3. investigate what instructions are practically used to access the structs. (load,
-        // store?)
-        // 4. add sanitation checks there, for _internal overflow_.
-        // (i.e., whenever a load happens whose source is a getelementptr associated to a struct
-        // instance, first insert a call to a function which crashes if the memory is a redzone)
-        // 5. verify the program now crashes on internal overflow, but not on the safe variant.
-        // 6. move on to union types. then after, external overflows.
+        // Some more TODO's:
+        // 1. add redzones for heap struct,
+        // 2. add redzones for nested struct types,
+        // 3. add redzones for arrays of structs,
+        // 4. look into makefile shenanigans to see why IR isn't being outputted/why runtime changes aren't detected for tests
+        // 5. see if we can move to storing marker values in redzones, and only walking the tree if we detect a marker value
+        // (but what about unaligned reads?)
         setupRedzoneChecks(&struct_mapping, M);
         outs() << "done!\n";
-        return PreservedAnalyses::none(); // TODO: check.
+        return PreservedAnalyses::none();
     }
 };
 } // namespace
