@@ -118,42 +118,37 @@ void findReturnInsts(SmallVector<ReturnInst *> *returns, Function *function) {
 void initialiseAllocaStruct(AllocaInst *allocaInst, Runtime *runtime,
                             std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo) {
     LLVMContext *C = &allocaInst->getContext();
+    IRBuilder<> builder(*C);
+    
     StringRef inflatedStructName = allocaInst->getAllocatedType()->getStructName();
     std::shared_ptr<StructInfo> structInfo = redzoneInfo->at(inflatedStructName);
-
-    outs() << "adding allocations for struct: " << inflatedStructName << " which has "
-           << structInfo.get()->redzone_offsets.size() << "\n";
-    Instruction *alloc_insertion = allocaInst->getParent()->getTerminator();
 
     SmallVector<ReturnInst *> functionExits = {};
     findReturnInsts(&functionExits, allocaInst->getParent()->getParent());
 
-    for (size_t i : structInfo.get()->redzone_offsets) {
+    for (size_t i : structInfo.get()->redzone_offsets)
+    {
+        // create GEP to get pointer to redzone
         outs() << "    + " << i << "\n";
-
-        // create GEP
+        builder.SetInsertPoint(allocaInst->getNextNode());
         SmallVector<Value *> indeces = {ConstantInt::get(IntegerType::getInt32Ty(*C), 0, false),
                                         ConstantInt::get(IntegerType::getInt32Ty(*C), i, false)};
-        GetElementPtrInst *redzone_addr = GetElementPtrInst::Create(
-            allocaInst->getAllocatedType(), allocaInst, indeces, "", alloc_insertion);
+        Value *redzone_addr = builder.CreateGEP(allocaInst->getAllocatedType(), allocaInst, indeces);
 
         // create CALL to void @__rdzone_add(i8*, i64)
         SmallVector<Value *> argsAdd = {
-            CastInst::CreatePointerCast(
-                redzone_addr, PointerType::get(IntegerType::getInt8Ty(*C), 0), "", alloc_insertion),
+            builder.CreateBitCast(redzone_addr, PointerType::get(IntegerType::getInt8Ty(*C), 0)),
             ConstantInt::get(IntegerType::getInt64Ty(*C), REDZONE_SIZE, false)};
-        CallInst *newCall = CallInst::Create(runtime->rdzone_add_f, argsAdd, "", alloc_insertion);
-        outs() << "add call = " << *newCall << " for function: " << *runtime->rdzone_add_f << "\n";
+        builder.CreateCall(runtime->rdzone_add_f, argsAdd);
 
         // create CALL to void @__rdzone_rm(i8*)
         SmallVector<Value *> argsRm = {argsAdd[0]};
-
-        for (ReturnInst *ret : functionExits) {
-            CallInst *newCall = CallInst::Create(runtime->rdzone_rm_f, argsRm, "", ret);
-            outs() << "add call = " << *newCall << " for function: " << *runtime->rdzone_add_f
-                   << "\n";
+        for(ReturnInst *ret : functionExits){
+            builder.SetInsertPoint(ret);
+            builder.CreateCall(runtime->rdzone_rm_f, argsRm);
         }
     }
+    
 }
 
 /**
@@ -166,14 +161,19 @@ void initialiseAllocaStruct(AllocaInst *allocaInst, Runtime *runtime,
 void insertMemAccessCheck(Instruction *ins, Value *ptrOperand, Type *accessedType,
                           Runtime *runtime) {
     assert(ptrOperand && ins);
+    LLVMContext* C = &ins->getContext();
+    IRBuilder<> builder(*C);
+    builder.SetInsertPoint(ins);
     // find a way to get the ptr type of the operand.
     // cast it to a i8*
     // insert a call to __rdzone_check
 
+    //cast our pointer to i8*
     PointerType *rawPtrTy = dyn_cast<PointerType>(ptrOperand->getType());
     assert(rawPtrTy);
     PointerType *targetPtrTy = IntegerType::getInt8PtrTy(ins->getContext());
-    CastInst *castedPtr = BitCastInst::CreatePointerCast(ptrOperand, targetPtrTy, "", ins);
+    Value* castedPtr = builder.CreateBitCast(ptrOperand, targetPtrTy);
+    
     PointerType *ptr_ty = IntegerType::getInt8PtrTy(ins->getContext());
     SmallVector<Value *> one = {
         ConstantInt::get(IntegerType::getInt8Ty(ins->getContext()), APInt(8, 1))};
@@ -182,15 +182,12 @@ void insertMemAccessCheck(Instruction *ins, Value *ptrOperand, Type *accessedTyp
     Create a typed null pointer. Index it by 1.
     */
     ConstantPointerNull *typedNullPtr = ConstantPointerNull::get(PointerType::get(accessedType, 0));
-    GetElementPtrInst *sizeofPtr =
-        GetElementPtrInst::Create(accessedType, typedNullPtr, one, "", ins);
-    CastInst *sizeofInt =
-        CastInst::CreatePointerCast(sizeofPtr, IntegerType::getInt8Ty(ins->getContext()), "", ins);
-    // Value* widthVal = ConstantInt::get(IntegerType::getInt8Ty(ins->getContext()), width);
+    Value* sizeofPtr = builder.CreateGEP(accessedType, typedNullPtr, one);
+    Value* sizeofInt = builder.CreatePtrToInt(sizeofPtr, IntegerType::getInt8Ty(ins->getContext()));
 
     SmallVector<Value *> args = {castedPtr, sizeofInt};
 
-    CallInst *newCall = CallInst::Create(runtime->rdzone_check_f, args, "", ins);
+    builder.CreateCall(runtime->rdzone_check_f, args);
 }
 
 /**
