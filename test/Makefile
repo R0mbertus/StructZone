@@ -32,11 +32,11 @@ dirs:
 
 .PRECIOUS: $(IN_DIR)/%.ll
 $(IN_DIR)/%.ll: $(SRC_DIR)/%.c
-	clang -S -emit-llvm $< -o $@
+	clang -S -emit-llvm -Xclang -disable-O0-optnone $< -o $@
 
 .PRECIOUS: $(OUT_DIR)/%.out.ll
 $(OUT_DIR)/%.out.ll: $(IN_DIR)/%.ll
-	opt -load-pass-plugin=$(PASS_DIR)"/bin/Sanitizer.so" -S -passes=structzone-sanitizer $< -o $@
+	opt -load-pass-plugin=$(PASS_DIR)"/bin/Sanitizer.so" -S -passes="function(mem2reg),structzone-sanitizer" $< -o $@
 
 $(BIN_DIR)/%: $(OUT_DIR)/%.out.ll
 	clang $< -o $@ -g -fstandalone-debug -L$(RUNTIME_BIN_DIR) -l:Runtime.a -lm -lstdc++
@@ -44,5 +44,5 @@ $(BIN_DIR)/%: $(OUT_DIR)/%.out.ll
 
 .PHONY: clean
 clean:
-	@echo rm *.ll ./bin/*
-	@rm -f *.ll ./bin/*
+	@echo rm ./**/*.ll ./bin/*
+	@rm -f ./**/*.ll ./bin/*
