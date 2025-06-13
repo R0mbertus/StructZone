@@ -41,7 +41,7 @@ def run_test():
         
         if expected_succ:
             # Compile the source file with gcc, so that we can check against its unaltered output.
-            test = sp.run(["gcc", f"./src/{i}.c", "-o", f"./bin/{i}.orig"], capture_output = True, text = True)
+            sp.check_call(["gcc", f"./src/{i}.c", "-o", f"./bin/{i}.orig"])
             orig_res = sp.run([f"./bin/{i}.orig"], capture_output = True, text = True)
             if orig_res.stdout != res.stdout:
                 print(f"{COLORS['KRED'] }[FAILED]{COLORS['KNRM']} {i}")
