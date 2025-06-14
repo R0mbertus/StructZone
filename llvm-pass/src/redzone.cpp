@@ -29,7 +29,6 @@ void add_runtime_test(Function *test_function, Module &M) {
         for (BasicBlock &bb : F) {
             for (Instruction &I : bb) {
                 CallInst *newCall = CallInst::Create(test_function, "", &I);
-                outs() << "call : " << *newCall << "\n";
                 break;
             }
             break;
@@ -110,30 +109,37 @@ void findReturnInsts(SmallVector<ReturnInst *> *returns, Function *function) {
 }
 
 /**
- * Function that instruments stack structs with redzone initialiser and de-initialiser
+ * Function that instruments code to allocate redzone initialiser and de-initialiser
  * functions.
- * @param allocaInst the alloca corresponding to the stack struct.
+ * @param insertionPt the instruction to be inserted after. This instruction should be
+ * the source of the pointer to the struct
  * @param runtime The collection of linked runtime functions.
+ * @param type The struct type to be implemented
+ * @param redzoneInfo A map from struct name to the struct info.
  */
-void initialiseAllocaStruct(AllocaInst *allocaInst, Runtime *runtime,
-                            std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo) {
-    LLVMContext *C = &allocaInst->getContext();
-    IRBuilder<> builder(*C);
+void insert_rdzone_init(Instruction* ptrToStruct, Runtime* runtime, Type* type,
+    std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo){
+    assert(type->isStructTy());
+    assert(ptrToStruct && runtime && type);
     
-    StringRef inflatedStructName = allocaInst->getAllocatedType()->getStructName();
+    LLVMContext *C = &ptrToStruct->getContext();
+    IRBuilder<> builder(*C);
+    StructType* structType = dyn_cast<StructType>(type);
+    assert(structType);
+    
+    StringRef inflatedStructName = type->getStructName();
     std::shared_ptr<StructInfo> structInfo = redzoneInfo->at(inflatedStructName);
 
     SmallVector<ReturnInst *> functionExits = {};
-    findReturnInsts(&functionExits, allocaInst->getParent()->getParent());
+    findReturnInsts(&functionExits, ptrToStruct->getParent()->getParent());
 
     for (size_t i : structInfo.get()->redzone_offsets)
     {
         // create GEP to get pointer to redzone
-        outs() << "    + " << i << "\n";
-        builder.SetInsertPoint(allocaInst->getNextNode());
+        builder.SetInsertPoint(ptrToStruct->getNextNode());
         SmallVector<Value *> indeces = {ConstantInt::get(IntegerType::getInt32Ty(*C), 0, false),
                                         ConstantInt::get(IntegerType::getInt32Ty(*C), i, false)};
-        Value *redzone_addr = builder.CreateGEP(allocaInst->getAllocatedType(), allocaInst, indeces);
+        Value *redzone_addr = builder.CreateGEP(type, ptrToStruct, indeces);
 
         // create CALL to void @__rdzone_add(i8*, i64)
         SmallVector<Value *> argsAdd = {
@@ -148,7 +154,32 @@ void initialiseAllocaStruct(AllocaInst *allocaInst, Runtime *runtime,
             builder.CreateCall(runtime->rdzone_rm_f, argsRm);
         }
     }
-    
+
+    // Recurse on nested structs
+    int i = 0;
+    for(Type *field : structType->elements()){
+
+        /**
+         * check if field is structTy
+         * make a pointer to the nested struct by GEP og 0 (i)
+         * recurse
+         */
+        if ((!field->isStructTy()) || field->isArrayTy())
+        {
+            i++;
+            continue;
+        }
+        builder.SetInsertPoint(ptrToStruct->getNextNode());
+        
+        SmallVector<Value*> indeces = {
+            ConstantInt::get(IntegerType::getInt32Ty(*C), 0, false),
+            ConstantInt::get(IntegerType::getInt32Ty(*C), i, false),
+        };
+
+        Value* ptrToInner = builder.CreateGEP(structType, ptrToStruct, indeces);
+        i++;
+        insert_rdzone_init(dyn_cast<Instruction>(ptrToInner), runtime, field, redzoneInfo);
+    }
 }
 
 /**
@@ -203,7 +234,7 @@ void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo
             for (Instruction &inst : bb) {
                 AllocaInst *alloca_inst = dyn_cast<AllocaInst>(&inst);
                 if (alloca_inst && alloca_inst->getAllocatedType()->isStructTy()) {
-                    initialiseAllocaStruct(alloca_inst, &runtime, redzoneInfo);
+                    insert_rdzone_init(alloca_inst, &runtime, alloca_inst->getAllocatedType(), redzoneInfo);
                     continue;
                 }
 
