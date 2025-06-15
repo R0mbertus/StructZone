@@ -12,6 +12,7 @@ struct Runtime {
     Function *rdzone_add_f;
     Function *rdzone_check_f;
     Function *rdzone_rm_f;
+    Function *rdzone_heaprm_f;
 };
 
 /**
@@ -29,7 +30,6 @@ void add_runtime_test(Function *test_function, Module &M) {
         for (BasicBlock &bb : F) {
             for (Instruction &I : bb) {
                 CallInst *newCall = CallInst::Create(test_function, "", &I);
-                outs() << "call : " << *newCall << "\n";
                 break;
             }
             break;
@@ -64,6 +64,7 @@ struct Runtime add_runtime_linkage(Module &M) {
     SmallVector<Type *> rdzone_check_args = {PointerType::get(Type::getInt8Ty(M.getContext()), 0),
                                              Type::getInt8Ty(M.getContext())};
     SmallVector<Type *> rdzone_rm_args = {PointerType::get(Type::getInt8Ty(M.getContext()), 0)};
+    SmallVector<Type *> rdzone_heaprm_args = {PointerType::get(Type::getInt8Ty(M.getContext()), 0)};
 
     // Function types
     FunctionType *test_runtime_t = FunctionType::get(Type::getVoidTy(M.getContext()),
@@ -74,6 +75,8 @@ struct Runtime add_runtime_linkage(Module &M) {
                                                      ArrayRef<Type *>(rdzone_check_args), false);
     FunctionType *rdzone_rm_t =
         FunctionType::get(Type::getVoidTy(M.getContext()), ArrayRef<Type *>(rdzone_rm_args), false);
+    FunctionType *rdzone_heaprm_t =
+        FunctionType::get(Type::getVoidTy(M.getContext()), ArrayRef<Type *>(rdzone_heaprm_args), false);
 
     // FunctionCallee prototype = M.getOrInsertFunction("test_runtime_link", f);
     Function *test_runtime_f =
@@ -84,11 +87,14 @@ struct Runtime add_runtime_linkage(Module &M) {
         Function::Create(rdzone_check_t, Function::ExternalLinkage, "__rdzone_check", M);
     Function *rdzone_rm_f =
         Function::Create(rdzone_rm_t, Function::ExternalLinkage, "__rdzone_rm", M);
+    Function *rdzone_heaprm_f =
+        Function::Create(rdzone_heaprm_t, Function::ExternalLinkage, "__rdzone_heaprm", M);
 
     struct Runtime runtime = {};
     runtime.rdzone_add_f = rdzone_add_f;
     runtime.rdzone_check_f = rdzone_check_f;
     runtime.rdzone_rm_f = rdzone_rm_f;
+    runtime.rdzone_heaprm_f = rdzone_heaprm_f;
 
     add_runtime_test(test_runtime_f, M);
     return runtime;
@@ -110,49 +116,86 @@ void findReturnInsts(SmallVector<ReturnInst *> *returns, Function *function) {
 }
 
 /**
- * Function that instruments stack structs with redzone initialiser and de-initialiser
+ * Function that instruments code to allocate redzone initialiser and de-initialiser
  * functions.
- * @param allocaInst the alloca corresponding to the stack struct.
+ * @param insertionPt the instruction to be inserted after. This instruction should be
+ * the source of the pointer to the struct
  * @param runtime The collection of linked runtime functions.
+ * @param type The struct type to be implemented
+ * @param redzoneInfo A map from struct name to the struct info.
  */
-void initialiseAllocaStruct(AllocaInst *allocaInst, Runtime *runtime,
-                            std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo) {
-    LLVMContext *C = &allocaInst->getContext();
-    StringRef inflatedStructName = allocaInst->getAllocatedType()->getStructName();
+void insert_rdzone_init(Instruction *ptrToStruct, Runtime *runtime, Type *type,
+                        std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo) {
+    assert(type->isStructTy());
+    assert(ptrToStruct && runtime && type);
+
+    LLVMContext *C = &ptrToStruct->getContext();
+    IRBuilder<> builder(*C);
+    StructType *structType = dyn_cast<StructType>(type);
+    assert(structType);
+
+    StringRef inflatedStructName = type->getStructName();
     std::shared_ptr<StructInfo> structInfo = redzoneInfo->at(inflatedStructName);
 
-    outs() << "adding allocations for struct: " << inflatedStructName << " which has "
-           << structInfo.get()->redzone_offsets.size() << "\n";
-    Instruction *alloc_insertion = allocaInst->getParent()->getTerminator();
-
     SmallVector<ReturnInst *> functionExits = {};
-    findReturnInsts(&functionExits, allocaInst->getParent()->getParent());
+    findReturnInsts(&functionExits, ptrToStruct->getParent()->getParent());
 
     for (size_t i : structInfo.get()->redzone_offsets) {
-        outs() << "    + " << i << "\n";
-
-        // create GEP
+        Value* structPtr;
+        // create GEP to get pointer to redzone
+        builder.SetInsertPoint(ptrToStruct->getNextNode());
         SmallVector<Value *> indeces = {ConstantInt::get(IntegerType::getInt32Ty(*C), 0, false),
                                         ConstantInt::get(IntegerType::getInt32Ty(*C), i, false)};
-        GetElementPtrInst *redzone_addr = GetElementPtrInst::Create(
-            allocaInst->getAllocatedType(), allocaInst, indeces, "", alloc_insertion);
+        
+        PointerType* received_ptr = dyn_cast<PointerType>(ptrToStruct->getType());
+        if (received_ptr->isOpaque() || received_ptr->getPointerElementType() != type)
+        {
+            structPtr = builder.CreateBitCast(ptrToStruct, type->getPointerTo());
+        }
+        else{
+            structPtr = ptrToStruct;
+        }
+        Value *redzone_addr = builder.CreateGEP(type, structPtr, indeces);
 
         // create CALL to void @__rdzone_add(i8*, i64)
         SmallVector<Value *> argsAdd = {
-            CastInst::CreatePointerCast(
-                redzone_addr, PointerType::get(IntegerType::getInt8Ty(*C), 0), "", alloc_insertion),
+            builder.CreateBitCast(redzone_addr, PointerType::get(IntegerType::getInt8Ty(*C), 0)),
             ConstantInt::get(IntegerType::getInt64Ty(*C), REDZONE_SIZE, false)};
-        CallInst *newCall = CallInst::Create(runtime->rdzone_add_f, argsAdd, "", alloc_insertion);
-        outs() << "add call = " << *newCall << " for function: " << *runtime->rdzone_add_f << "\n";
+        builder.CreateCall(runtime->rdzone_add_f, argsAdd);
 
-        // create CALL to void @__rdzone_rm(i8*)
-        SmallVector<Value *> argsRm = {argsAdd[0]};
-
-        for (ReturnInst *ret : functionExits) {
-            CallInst *newCall = CallInst::Create(runtime->rdzone_rm_f, argsRm, "", ret);
-            outs() << "add call = " << *newCall << " for function: " << *runtime->rdzone_add_f
-                   << "\n";
+        if (AllocaInst *allocaInst = dyn_cast<AllocaInst>(ptrToStruct)) {
+            // create CALL to void @__rdzone_rm(i8*)
+            SmallVector<Value *> argsRm = {argsAdd[0]};
+            for (ReturnInst *ret : functionExits) {
+                builder.SetInsertPoint(ret);
+                builder.CreateCall(runtime->rdzone_rm_f, argsRm);
+            }
         }
+    }
+
+    // Recurse on nested structs
+    int i = 0;
+    for (Type *field : structType->elements()) {
+
+        /**
+         * check if field is structTy
+         * make a pointer to the nested struct by GEP og 0 (i)
+         * recurse
+         */
+        if ((!field->isStructTy()) || field->isArrayTy()) {
+            i++;
+            continue;
+        }
+        builder.SetInsertPoint(ptrToStruct->getNextNode());
+
+        SmallVector<Value *> indeces = {
+            ConstantInt::get(IntegerType::getInt32Ty(*C), 0, false),
+            ConstantInt::get(IntegerType::getInt32Ty(*C), i, false),
+        };
+
+        Value *ptrToInner = builder.CreateGEP(structType, ptrToStruct, indeces);
+        i++;
+        insert_rdzone_init(dyn_cast<Instruction>(ptrToInner), runtime, field, redzoneInfo);
     }
 }
 
@@ -166,14 +209,19 @@ void initialiseAllocaStruct(AllocaInst *allocaInst, Runtime *runtime,
 void insertMemAccessCheck(Instruction *ins, Value *ptrOperand, Type *accessedType,
                           Runtime *runtime) {
     assert(ptrOperand && ins);
+    LLVMContext *C = &ins->getContext();
+    IRBuilder<> builder(*C);
+    builder.SetInsertPoint(ins);
     // find a way to get the ptr type of the operand.
     // cast it to a i8*
     // insert a call to __rdzone_check
 
+    // cast our pointer to i8*
     PointerType *rawPtrTy = dyn_cast<PointerType>(ptrOperand->getType());
     assert(rawPtrTy);
     PointerType *targetPtrTy = IntegerType::getInt8PtrTy(ins->getContext());
-    CastInst *castedPtr = BitCastInst::CreatePointerCast(ptrOperand, targetPtrTy, "", ins);
+    Value *castedPtr = builder.CreateBitCast(ptrOperand, targetPtrTy);
+
     PointerType *ptr_ty = IntegerType::getInt8PtrTy(ins->getContext());
     SmallVector<Value *> one = {
         ConstantInt::get(IntegerType::getInt8Ty(ins->getContext()), APInt(8, 1))};
@@ -182,15 +230,20 @@ void insertMemAccessCheck(Instruction *ins, Value *ptrOperand, Type *accessedTyp
     Create a typed null pointer. Index it by 1.
     */
     ConstantPointerNull *typedNullPtr = ConstantPointerNull::get(PointerType::get(accessedType, 0));
-    GetElementPtrInst *sizeofPtr =
-        GetElementPtrInst::Create(accessedType, typedNullPtr, one, "", ins);
-    CastInst *sizeofInt =
-        CastInst::CreatePointerCast(sizeofPtr, IntegerType::getInt8Ty(ins->getContext()), "", ins);
-    // Value* widthVal = ConstantInt::get(IntegerType::getInt8Ty(ins->getContext()), width);
+    Value *sizeofPtr = builder.CreateGEP(accessedType, typedNullPtr, one);
+    Value *sizeofInt = builder.CreatePtrToInt(sizeofPtr, IntegerType::getInt8Ty(ins->getContext()));
 
     SmallVector<Value *> args = {castedPtr, sizeofInt};
 
-    CallInst *newCall = CallInst::Create(runtime->rdzone_check_f, args, "", ins);
+    builder.CreateCall(runtime->rdzone_check_f, args);
+}
+
+void insert_heap_free(CallInst* callToFree, struct Runtime* runtime){
+    assert(callToFree && runtime);
+    LLVMContext *C = &callToFree->getContext();
+    IRBuilder<> builder(*C);
+    Value* freedPtr = callToFree->getArgOperand(0);
+    outs() << "The source of the freed ptr: " << *freedPtr << "\n";
 }
 
 /**
@@ -199,14 +252,16 @@ void insertMemAccessCheck(Instruction *ins, Value *ptrOperand, Type *accessedTyp
  * in the form of `structName` -> fieldIndex
  * @param M the module to instrument. This should already contain all inflated structs
  */
-void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo, Module &M) {
+void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo, Module &M,
+                   std::map<CallInst *, StructInfo> *heapStructInfo) {
     struct Runtime runtime = add_runtime_linkage(M);
     for (Function &func : M) {
         for (BasicBlock &bb : func) {
             for (Instruction &inst : bb) {
                 AllocaInst *alloca_inst = dyn_cast<AllocaInst>(&inst);
                 if (alloca_inst && alloca_inst->getAllocatedType()->isStructTy()) {
-                    initialiseAllocaStruct(alloca_inst, &runtime, redzoneInfo);
+                    insert_rdzone_init(alloca_inst, &runtime, alloca_inst->getAllocatedType(),
+                                       redzoneInfo);
                     continue;
                 }
 
@@ -224,6 +279,14 @@ void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo
                                          storeInst->getOperand(0)->getType(), &runtime);
                     continue;
                 }
+                CallInst *callInst = dyn_cast<CallInst>(&inst);
+                if (callInst && (heapStructInfo->count(callInst) > 0)) {
+                    insert_rdzone_init(callInst, &runtime, heapStructInfo->at(callInst).inflatedType,
+                                       redzoneInfo);
+                    continue;
+                } else if(callInst && callInst->getCalledFunction()->getName().equals("free")){
+                    insert_heap_free(callInst, &runtime);
+                }
             }
         }
     }
@@ -236,8 +299,9 @@ void refactor_structinfo(std::map<Type *, std::shared_ptr<StructInfo>> *structIn
     }
 }
 
-void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M) {
+void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
+                        std::map<CallInst *, StructInfo> *heapStructInfo) {
     std::map<StringRef, std::shared_ptr<StructInfo>> redzoneInfo;
     refactor_structinfo(info, &redzoneInfo);
-    setupRedzones(&redzoneInfo, M);
+    setupRedzones(&redzoneInfo, M, heapStructInfo);
 }
