@@ -48,12 +48,30 @@ void assert_ok(uint64_t probe, uint8_t width)
     }
 }
 
+bool test_rm_between(){
+    __rdzone_add((void*)0x400000, 32);
+    __rdzone_add((void*)0x400100, 32);
+    __rdzone_add((void*)0x400200, 32);
+    __rdzone_add((void*)0x400300, 32);
+    __rdzone_add((void*)0x400400, 32);
+    __rdzone_rm_between((void*)0x400180, 0x27f);
+
+    assert_abort(0x400000, 1);
+    
+    assert_ok(0x400200, 1);
+    assert_ok(0x400210, 1);
+    assert_ok(0x400300, 1);
+    assert_ok(0x400310, 1);
+    assert_abort(0x400400, 1);
+    assert_abort(0x400410, 1);
+    return true;
+}
 
 int main()
 {
     signal(SIGABRT, catch_abrt);
     tcase testcases[] = {
-
+        &test_rm_between
     };
 
     //is this cheating?
