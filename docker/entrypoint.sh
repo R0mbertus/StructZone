@@ -5,8 +5,4 @@ pwd
 make
 popd
 
-pushd /src/test
-
-popd
-
 /bin/bash

@@ -4,8 +4,11 @@ Fuzzing project that attempts to detect struct overflows.
 
 ## Dependencies & Environment
 
-For the best experience, run the docker container using `docker compose up`. If you instead want to
- run the project locally, install the dependencies listed in the [Dockerfile](./docker/Dockerfile). 
+For the best experience, run the docker container using `podman/docker compose up`. If you instead
+ want to run the project locally, install the dependencies listed in the [Dockerfile](./docker/Dockerfile).
+
+Additionally, make sure there's an install of SPEC CPU2017 present on your system, and set the
+ environment variable `$SPEC_ROOT` to the root of the install directory.
 
 ### Commits
 
@@ -23,4 +26,16 @@ There's a directory `test` which contains toy examples that showcase different t
 
 ### Spec Benchmark
 
-TODO: when spec comes in write this
+For the spec benchmark, a selection was made of worloads that are written in C and make usage of
+ structs with only simple library calls on the structs. The ones chosen from these constraints are
+ `605.mcf_s, TODO: find more`.
+
+There are two configs, `scripts/spec-files/base.cfg` or `scripts/spec-files/structzone.cfg` that are
+ for the base and StructZone enabled runs respectively. Running can be done using the following
+ command:
+
+```sh
+./scripts/spec_setup.sh
+cd $SPEC_ROOT && source shrc
+runcpu --config=<base/structzone>.cfg structs
+```

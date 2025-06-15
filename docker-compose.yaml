@@ -3,7 +3,10 @@ services:
     build:
       context: docker/
     volumes:
+      - ${SPEC_ROOT}:/spec:z
       - .:/src:z
+    environment:
+      - SPEC_ROOT=/spec
     working_dir: /src
     stdin_open: true # docker run -i
     tty: true
