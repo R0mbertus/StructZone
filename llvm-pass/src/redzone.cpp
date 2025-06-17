@@ -284,7 +284,7 @@ void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo
                     insert_rdzone_init(callInst, &runtime, heapStructInfo->at(callInst).inflatedType,
                                        redzoneInfo);
                     continue;
-                } else if(callInst && callInst->getCalledFunction()->getName().equals("free")){
+                } else if(callInst && callInst->getCalledFunction() && callInst->getCalledFunction()->getName().equals("free")){
                     insert_heap_free(callInst, &runtime);
                 }
             }

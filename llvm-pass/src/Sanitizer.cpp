@@ -6,6 +6,8 @@
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+
 
 #include "redzone.h"
 
@@ -90,7 +92,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         auto src_type = gep_inst->getSourceElementType();
         int count = 0;
         std::vector<Value *> replaced_indices;
-        auto curr_type = gep_inst->getPointerOperand()->getType();
+        Type* curr_type = src_type->getPointerTo(); 
         // We walk over all indices, keeping track of the current type. This allows us to detect all
         // shapes of struct access that might require offset changing.
         for (auto &idx : gep_inst->indices()) {
@@ -269,6 +271,91 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         }
     }
 
+    Type* getInflatedType(Type* arg_type, bool* changed = NULL){
+        int pointer_layers = 0;
+        Type* arg_type_cp = arg_type;
+        while (arg_type_cp->isPointerTy())
+        {
+            pointer_layers++;
+            assert(!arg_type_cp->isOpaquePointerTy());
+            arg_type_cp = arg_type_cp->getPointerElementType();
+        }
+        if (arg_type_cp->isStructTy())
+        {
+            if(changed != NULL){
+                *changed = true;
+            }
+            arg_type_cp = struct_mapping[arg_type_cp].get()->inflatedType;
+        }
+        for (int i = 0; i < pointer_layers; i++)
+        {
+            arg_type_cp = arg_type_cp->getPointerTo();
+        }
+        return arg_type_cp;
+    }
+
+    void rebuildCalls(Module* M, Function* oldFunc, Function* newFunc){
+        for(Function &F : *M){
+            for (BasicBlock& bb : F)
+            {
+                for (Instruction& inst : bb)
+                {
+                    CallInst* callInst = dyn_cast<CallInst>(&inst);
+                    if(callInst){
+                        if (callInst->getCalledFunction() == oldFunc)
+                        {
+                            callInst->setCalledFunction(newFunc);
+                        }
+                        
+                    }
+                }
+            }
+        }
+    }
+
+    //this function is mostly here to make sure the module is still valid after
+    //transformation. It converts any struct args to inflated args
+    void replaceFunctionTypes(Function *func){
+        /**
+         * For all args:
+         *  * get the type
+         *  * if pointer recurse
+         */
+        bool hasStructArgs = false;
+        SmallVector<Type*> newArgs;
+        ValueToValueMapTy map;
+        outs() << "checking function " << func->getName();
+
+        for (Argument* a = func->arg_begin(); a < func->arg_end(); a++)
+        {
+            Type* newArg = getInflatedType(a->getType(), &hasStructArgs);
+            newArgs.push_back(newArg);
+        }
+        FunctionType* inflatedFuncType = FunctionType::get(
+            getInflatedType(func->getReturnType(), &hasStructArgs), newArgs, func->isVarArg()
+        );
+
+        if(!hasStructArgs){
+            outs() << " (skipped, no struct args/ret-value)\n";
+            return;
+        }
+
+        Function* newFunc = Function::Create(inflatedFuncType, 
+            Function::InternalLinkage, func->getName() + ".inflated", func->getParent());
+        
+        for (size_t i = 0; i < newFunc->arg_size(); i++)
+        {
+            map.insert({func->getArg(i), newFunc->getArg(i)});
+        }
+        SmallVector<ReturnInst*> returns;
+        outs() << " cloning " << func->getName() << " to " << newFunc->getName() << "\n";
+        rebuildCalls(func->getParent(), func, newFunc);
+        CloneFunctionInto(newFunc, func, map, CloneFunctionChangeType::LocalChangesOnly, returns);
+        func->replaceAllUsesWith(newFunc);
+        func->deleteBody();
+        
+    }
+
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
         auto datalayout = M.getDataLayout();
         auto &context = M.getContext();
@@ -280,6 +367,17 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             auto si = WalkStruct(st, datalayout, context);
             struct_mapping[st] = si;
         }
+
+        SmallVector<Function*> funcs;
+        for (auto &func : M)
+        {
+            funcs.push_back(&func);
+        }
+        for (Function* func : funcs)
+        {
+            replaceFunctionTypes(func);
+        }
+        
 
         for (auto &func : M) {
             // Then it is an external function, and must be linked. We can't instrument this -
@@ -355,6 +453,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // 4. look into makefile shenanigans to see why IR isn't being outputted/why runtime changes aren't detected for tests
         // 5. see if we can move to storing marker values in redzones, and only walking the tree if we detect a marker value
         // (but what about unaligned reads?)
+
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);
         outs() << "done!\n";
         return PreservedAnalyses::none();
