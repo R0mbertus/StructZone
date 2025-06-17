@@ -330,6 +330,7 @@ AVLTree redzones;
 void __rdzone_check(void *probe, uint8_t op_width) {
     if (redzones.CheckPoison((uint64_t)probe, op_width)) {
         cerr << "ILLEGAL ACCESS AT " << probe << "\n";
+        redzones.printTree();
         kill(getpid(), SIGABRT);
     }
 }
