@@ -8,7 +8,8 @@ struct Simple {
 };
 
 int main() {
-    // Note: we very explicitly do not use struct initializer, as they get lowered to memset / memcpy.
+    // Note: we very explicitly do not use struct initializer, as they get lowered to memset /
+    // memcpy.
     struct Simple example;
     example.zero = 7;
     example.one[0] = 1;
@@ -17,14 +18,12 @@ int main() {
     example.two[1] = 4;
     example.two[2] = 5;
     example.three = 6;
-     // Print to see what the contents are;
+    // Print to see what the contents are;
     printf("zero %i\n", example.zero);
-    for (int i = 0; i < 2; i++)
-    {
+    for (int i = 0; i < 2; i++) {
         printf("one %i %i\n", i, example.one[i]);
     }
-    for (int i = 0; i < 3; i++)
-    {
+    for (int i = 0; i < 3; i++) {
         printf("two %i %i\n", i, example.two[i]);
     }
     printf("three %i\n", example.three);

@@ -8,12 +8,13 @@ struct Simple {
 };
 
 struct Nested {
-	int zero;
-	struct Simple one;
+    int zero;
+    struct Simple one;
 };
 
 int main() {
-    // Note: we very explicitly do not use struct initializer, as they get lowered to memset / memcpy.
+    // Note: we very explicitly do not use struct initializer, as they get lowered to memset /
+    // memcpy.
     struct Nested example;
     example.zero = 8;
     example.one.zero = 7;
@@ -24,19 +25,16 @@ int main() {
     example.one.two[2] = 5;
     example.one.three = 6;
     // We now overflow from one into two, but we _also_ underflow into one and the outer zero field.
-    for (int i = -8; i < 5; i++)
-    {
+    for (int i = -8; i < 5; i++) {
         example.one.one[i] = 0;
     }
-     // Print to see what the contents are;
+    // Print to see what the contents are;
     printf("outer zero %i\n", example.zero);
     printf("inner zero %i\n", example.one.zero);
-    for (int i = 0; i < 2; i++)
-    {
+    for (int i = 0; i < 2; i++) {
         printf("one %i %i\n", i, example.one.one[i]);
     }
-    for (int i = 0; i < 3; i++)
-    {
+    for (int i = 0; i < 3; i++) {
         printf("two %i %i\n", i, example.one.two[i]);
     }
     printf("three %i\n", example.one.three);

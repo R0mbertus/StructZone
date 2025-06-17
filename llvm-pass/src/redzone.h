@@ -39,5 +39,5 @@ struct StructInfo {
     std::vector<size_t> redzone_offsets;
 };
 
-void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, 
-    Module &M, std::map<CallInst*, StructInfo> * heapStructInfo);
+void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
+                        std::map<CallInst *, StructInfo> *heapStructInfo);

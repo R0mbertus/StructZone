@@ -8,7 +8,6 @@
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
-
 #include "redzone.h"
 
 using namespace llvm;
@@ -92,7 +91,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         auto src_type = gep_inst->getSourceElementType();
         int count = 0;
         std::vector<Value *> replaced_indices;
-        Type* curr_type = src_type->getPointerTo(); 
+        Type *curr_type = src_type->getPointerTo();
         // We walk over all indices, keeping track of the current type. This allows us to detect all
         // shapes of struct access that might require offset changing.
         for (auto &idx : gep_inst->indices()) {
@@ -142,7 +141,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
             count += 1;
         }
-        
+
         ArrayType *arr_type = nullptr;
         // Array type? no problem. we can just reason over the element type!
         if (auto *src_arr_type = dyn_cast<ArrayType>(src_type)) {
@@ -203,7 +202,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
     }
 
     void handle_bitcast(BitCastInst *bitcast_inst, BitcastMap &bitcast_replacements,
-                        LLVMContext &context, std::map<CallInst*, struct StructInfo>* heapStructInfo) {
+                        LLVMContext &context,
+                        std::map<CallInst *, struct StructInfo> *heapStructInfo) {
         // Replace all uses of other insts will take care of src type already.
         if (auto *dest_type = dyn_cast<PointerType>(bitcast_inst->getDestTy())) {
             if (struct_mapping.count(dest_type->getPointerElementType()) == 0) {
@@ -226,7 +226,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                                                           struct_info->inflatedSize * count);
                         call_inst->setArgOperand(i, new_size);
                         heapStructInfo->insert({call_inst, *struct_info.get()});
-                        
+
                     } else {
                         // Note: if we hit this, then (m/re/c)alloc are getting a non-constant size
                         // parameter. i dont expect this to happen, but if it does, it should error
@@ -271,95 +271,84 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         }
     }
 
-    Type* getInflatedType(Type* arg_type, bool* changed = NULL){
+    Type *getInflatedType(Type *arg_type, bool *changed = NULL) {
         int pointer_layers = 0;
-        Type* arg_type_cp = arg_type;
-        while (arg_type_cp->isPointerTy())
-        {
+        Type *arg_type_cp = arg_type;
+        while (arg_type_cp->isPointerTy()) {
             pointer_layers++;
             assert(!arg_type_cp->isOpaquePointerTy());
             arg_type_cp = arg_type_cp->getPointerElementType();
         }
-        if (arg_type_cp->isStructTy())
-        {
-            if(changed != NULL){
+        if (arg_type_cp->isStructTy()) {
+            if (changed != NULL) {
                 *changed = true;
             }
             arg_type_cp = struct_mapping[arg_type_cp].get()->inflatedType;
         }
-        for (int i = 0; i < pointer_layers; i++)
-        {
+        for (int i = 0; i < pointer_layers; i++) {
             arg_type_cp = arg_type_cp->getPointerTo();
         }
         return arg_type_cp;
     }
 
-    void rebuildCalls(Module* M, Function* oldFunc, Function* newFunc){
-        for(Function &F : *M){
-            for (BasicBlock& bb : F)
-            {
-                for (Instruction& inst : bb)
-                {
-                    CallInst* callInst = dyn_cast<CallInst>(&inst);
-                    if(callInst){
-                        if (callInst->getCalledFunction() == oldFunc)
-                        {
+    void rebuildCalls(Module *M, Function *oldFunc, Function *newFunc) {
+        for (Function &F : *M) {
+            for (BasicBlock &bb : F) {
+                for (Instruction &inst : bb) {
+                    CallInst *callInst = dyn_cast<CallInst>(&inst);
+                    if (callInst) {
+                        if (callInst->getCalledFunction() == oldFunc) {
                             callInst->setCalledFunction(newFunc);
                         }
-                        
                     }
                 }
             }
         }
     }
 
-    //this function is mostly here to make sure the module is still valid after
-    //transformation. It converts any struct args to inflated args
-    void replaceFunctionTypes(Function *func){
+    // this function is mostly here to make sure the module is still valid after
+    // transformation. It converts any struct args to inflated args
+    void replaceFunctionTypes(Function *func) {
         /**
          * For all args:
          *  * get the type
          *  * if pointer recurse
          */
         bool hasStructArgs = false;
-        SmallVector<Type*> newArgs;
+        SmallVector<Type *> newArgs;
         ValueToValueMapTy map;
         outs() << "checking function " << func->getName();
 
-        for (Argument* a = func->arg_begin(); a < func->arg_end(); a++)
-        {
-            Type* newArg = getInflatedType(a->getType(), &hasStructArgs);
+        for (Argument *a = func->arg_begin(); a < func->arg_end(); a++) {
+            Type *newArg = getInflatedType(a->getType(), &hasStructArgs);
             newArgs.push_back(newArg);
         }
-        FunctionType* inflatedFuncType = FunctionType::get(
-            getInflatedType(func->getReturnType(), &hasStructArgs), newArgs, func->isVarArg()
-        );
+        FunctionType *inflatedFuncType = FunctionType::get(
+            getInflatedType(func->getReturnType(), &hasStructArgs), newArgs, func->isVarArg());
 
-        if(!hasStructArgs){
+        if (!hasStructArgs) {
             outs() << " (skipped, no struct args/ret-value)\n";
             return;
         }
 
-        Function* newFunc = Function::Create(inflatedFuncType, 
-            Function::InternalLinkage, func->getName() + ".inflated", func->getParent());
-        
-        for (size_t i = 0; i < newFunc->arg_size(); i++)
-        {
+        Function *newFunc = Function::Create(inflatedFuncType, Function::InternalLinkage,
+                                             func->getName() + ".inflated", func->getParent());
+
+        for (size_t i = 0; i < newFunc->arg_size(); i++) {
             map.insert({func->getArg(i), newFunc->getArg(i)});
         }
-        SmallVector<ReturnInst*> returns;
+        SmallVector<ReturnInst *> returns;
         outs() << " cloning " << func->getName() << " to " << newFunc->getName() << "\n";
         rebuildCalls(func->getParent(), func, newFunc);
         CloneFunctionInto(newFunc, func, map, CloneFunctionChangeType::LocalChangesOnly, returns);
         func->replaceAllUsesWith(newFunc);
         func->deleteBody();
-        
     }
 
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
         auto datalayout = M.getDataLayout();
         auto &context = M.getContext();
-        std::map<CallInst*, StructInfo> heapStructInfo;
+        std::map<CallInst *, StructInfo> heapStructInfo;
 
         // Iterate over all struct types. I believe this one does NOT yet deal with external struct
         // definitions (header files even, perhaps? certainly not libraries)
@@ -368,16 +357,13 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             struct_mapping[st] = si;
         }
 
-        SmallVector<Function*> funcs;
-        for (auto &func : M)
-        {
+        SmallVector<Function *> funcs;
+        for (auto &func : M) {
             funcs.push_back(&func);
         }
-        for (Function* func : funcs)
-        {
+        for (Function *func : funcs) {
             replaceFunctionTypes(func);
         }
-        
 
         for (auto &func : M) {
             // Then it is an external function, and must be linked. We can't instrument this -
@@ -402,7 +388,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     } else if (auto *alloca_inst = dyn_cast<AllocaInst>(&inst)) {
                         handle_alloca(alloca_inst, alloca_replacements, context, datalayout);
                     } else if (auto *bitcast_instr = dyn_cast<BitCastInst>(&inst)) {
-                        handle_bitcast(bitcast_instr, bitcast_replacements, context, &heapStructInfo);
+                        handle_bitcast(bitcast_instr, bitcast_replacements, context,
+                                       &heapStructInfo);
                     } else if (auto *load_instr = dyn_cast<LoadInst>(&inst)) {
                         handle_load(load_instr, load_replacements, context);
                     }
@@ -450,9 +437,10 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // 1. add redzones for heap struct,
         // 2. add redzones for nested struct types,
         // 3. add redzones for arrays of structs,
-        // 4. look into makefile shenanigans to see why IR isn't being outputted/why runtime changes aren't detected for tests
-        // 5. see if we can move to storing marker values in redzones, and only walking the tree if we detect a marker value
-        // (but what about unaligned reads?)
+        // 4. look into makefile shenanigans to see why IR isn't being outputted/why runtime changes
+        // aren't detected for tests
+        // 5. see if we can move to storing marker values in redzones, and only walking the tree if
+        // we detect a marker value (but what about unaligned reads?)
 
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);
         outs() << "done!\n";

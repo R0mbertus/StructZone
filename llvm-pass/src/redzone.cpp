@@ -75,8 +75,8 @@ struct Runtime add_runtime_linkage(Module &M) {
                                                      ArrayRef<Type *>(rdzone_check_args), false);
     FunctionType *rdzone_rm_t =
         FunctionType::get(Type::getVoidTy(M.getContext()), ArrayRef<Type *>(rdzone_rm_args), false);
-    FunctionType *rdzone_heaprm_t =
-        FunctionType::get(Type::getVoidTy(M.getContext()), ArrayRef<Type *>(rdzone_heaprm_args), false);
+    FunctionType *rdzone_heaprm_t = FunctionType::get(Type::getVoidTy(M.getContext()),
+                                                      ArrayRef<Type *>(rdzone_heaprm_args), false);
 
     // FunctionCallee prototype = M.getOrInsertFunction("test_runtime_link", f);
     Function *test_runtime_f =
@@ -141,18 +141,16 @@ void insert_rdzone_init(Instruction *ptrToStruct, Runtime *runtime, Type *type,
     findReturnInsts(&functionExits, ptrToStruct->getParent()->getParent());
 
     for (size_t i : structInfo.get()->redzone_offsets) {
-        Value* structPtr;
+        Value *structPtr;
         // create GEP to get pointer to redzone
         builder.SetInsertPoint(ptrToStruct->getNextNode());
         SmallVector<Value *> indeces = {ConstantInt::get(IntegerType::getInt32Ty(*C), 0, false),
                                         ConstantInt::get(IntegerType::getInt32Ty(*C), i, false)};
-        
-        PointerType* received_ptr = dyn_cast<PointerType>(ptrToStruct->getType());
-        if (received_ptr->isOpaque() || received_ptr->getPointerElementType() != type)
-        {
+
+        PointerType *received_ptr = dyn_cast<PointerType>(ptrToStruct->getType());
+        if (received_ptr->isOpaque() || received_ptr->getPointerElementType() != type) {
             structPtr = builder.CreateBitCast(ptrToStruct, type->getPointerTo());
-        }
-        else{
+        } else {
             structPtr = ptrToStruct;
         }
         Value *redzone_addr = builder.CreateGEP(type, structPtr, indeces);
@@ -238,11 +236,11 @@ void insertMemAccessCheck(Instruction *ins, Value *ptrOperand, Type *accessedTyp
     builder.CreateCall(runtime->rdzone_check_f, args);
 }
 
-void insert_heap_free(CallInst* callToFree, struct Runtime* runtime){
+void insert_heap_free(CallInst *callToFree, struct Runtime *runtime) {
     assert(callToFree && runtime);
     LLVMContext *C = &callToFree->getContext();
     IRBuilder<> builder(*C);
-    Value* freedPtr = callToFree->getArgOperand(0);
+    Value *freedPtr = callToFree->getArgOperand(0);
     outs() << "The source of the freed ptr: " << *freedPtr << "\n";
 }
 
@@ -281,10 +279,11 @@ void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo
                 }
                 CallInst *callInst = dyn_cast<CallInst>(&inst);
                 if (callInst && (heapStructInfo->count(callInst) > 0)) {
-                    insert_rdzone_init(callInst, &runtime, heapStructInfo->at(callInst).inflatedType,
-                                       redzoneInfo);
+                    insert_rdzone_init(callInst, &runtime,
+                                       heapStructInfo->at(callInst).inflatedType, redzoneInfo);
                     continue;
-                } else if(callInst && callInst->getCalledFunction() && callInst->getCalledFunction()->getName().equals("free")){
+                } else if (callInst && callInst->getCalledFunction() &&
+                           callInst->getCalledFunction()->getName().equals("free")) {
                     insert_heap_free(callInst, &runtime);
                 }
             }
