@@ -11,6 +11,7 @@ TESTS = $(shell for i in $(CFILES); do basename -s .c $$i; done)
 
 RUNTIME_DIR="../runtime/"
 RUNTIME_BIN_DIR=$(RUNTIME_DIR)"bin/"
+RUNTIME_INC_DIR=$(RUNTIME_DIR)"src/"
 RUNTIME_LLVM_DIR=$(RUNTIME_DIR)"llvm/"
 PASS_DIR="../llvm-pass"
 
@@ -32,14 +33,14 @@ dirs:
 
 .PRECIOUS: $(IN_DIR)/%.ll
 $(IN_DIR)/%.ll: $(SRC_DIR)/%.c
-	clang -g -S -emit-llvm -Xclang -disable-O0-optnone $< -o $@
+	clang -I ${RUNTIME_INC_DIR} -g -S -emit-llvm -Xclang -disable-O0-optnone $< -o $@ -L$(RUNTIME_BIN_DIR) -l:Runtime.a 
 
 .PRECIOUS: $(OUT_DIR)/%.out.ll
 $(OUT_DIR)/%.out.ll: $(IN_DIR)/%.ll
 	opt -load-pass-plugin=$(PASS_DIR)"/bin/Sanitizer.so" -S -passes="function(mem2reg),structzone-sanitizer" $< -o $@
 
 $(BIN_DIR)/%: $(OUT_DIR)/%.out.ll
-	clang -g $< -o $@ -g -fstandalone-debug -L$(RUNTIME_BIN_DIR) -l:Runtime.a -lm -lstdc++ 
+	clang -L$(RUNTIME_BIN_DIR) -g $< -o $@ -g -fstandalone-debug -l:Runtime.a -lm -lstdc++ 
 
 .PHONY: clean
 clean:
