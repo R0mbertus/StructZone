@@ -434,12 +434,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
         }
         // Some more TODO's:
-        // 1. add redzones for heap struct,
-        // 2. add redzones for nested struct types,
-        // 3. add redzones for arrays of structs,
-        // 4. look into makefile shenanigans to see why IR isn't being outputted/why runtime changes
-        // aren't detected for tests
-        // 5. see if we can move to storing marker values in redzones, and only walking the tree if
+        // see if we can move to storing marker values in redzones, and only walking the tree if
         // we detect a marker value (but what about unaligned reads?)
 
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);

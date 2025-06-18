@@ -273,7 +273,11 @@ void insert_heap_free(CallInst *callToFree, struct Runtime *runtime) {
     IRBuilder<> builder(*C);
     Value *freedPtr = callToFree->getArgOperand(0);
     outs() << "The source of the freed ptr: " << *freedPtr << "\n";
-    // TODO: actually insert the free call.
+    // TODO:
+    // 1. walk back the freed pointer until we find (m/re/c)alloc as a source.
+    // 2. obtain the size from that source.
+    // 3. call __rdzone_rm_between with both the freed pointer and the size.
+    // 4. profit.
 }
 
 /**
