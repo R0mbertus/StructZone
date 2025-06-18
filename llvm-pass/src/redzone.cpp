@@ -272,7 +272,7 @@ void insert_heap_free(CallInst *callToFree, struct Runtime *runtime) {
  * @param M the module to instrument. This should already contain all inflated structs
  */
 void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo, Module &M,
-                   std::map<CallInst *, StructInfo> *heapStructInfo) {
+                   std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo) {
     struct Runtime runtime = add_runtime_linkage(M);
     for (Function &func : M) {
         for (BasicBlock &bb : func) {
@@ -309,15 +309,9 @@ void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo
                 // Note: this deals with (m/re/c)alloc, not just any called function.
                 CallInst *callInst = dyn_cast<CallInst>(&inst);
                 if (callInst && (heapStructInfo->count(callInst) > 0)) {
-                    // TODO: properly insert array size, one is not necessarily correct
-                    outs() << "TEST: ";
-                    callInst->print(outs());
-                    outs() << "\n";
-                    outs() << "TEST 2: ";
-                    heapStructInfo->at(callInst).inflatedType->print(outs());
-                    outs() << "\n";
+                    auto tup = heapStructInfo->at(callInst);
                     insert_rdzone_init(callInst, &runtime,
-                                       heapStructInfo->at(callInst).inflatedType, 1, redzoneInfo);
+                                       std::get<0>(tup).inflatedType, std::get<1>(tup), redzoneInfo);
                     continue;
                 } else if (callInst && callInst->getCalledFunction() &&
                            callInst->getCalledFunction()->getName().equals("free")) {
@@ -336,7 +330,7 @@ void refactor_structinfo(std::map<Type *, std::shared_ptr<StructInfo>> *structIn
 }
 
 void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
-                        std::map<CallInst *, StructInfo> *heapStructInfo) {
+                        std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo) {
     std::map<StringRef, std::shared_ptr<StructInfo>> redzoneInfo;
     refactor_structinfo(info, &redzoneInfo);
     setupRedzones(&redzoneInfo, M, heapStructInfo);
