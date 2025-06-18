@@ -90,12 +90,13 @@ struct Runtime add_runtime_linkage(Module &M) {
     Function *rdzone_heaprm_f =
         Function::Create(rdzone_heaprm_t, Function::ExternalLinkage, "__rdzone_heaprm", M);
 
-    struct Runtime runtime = {};
-    runtime.rdzone_add_f = rdzone_add_f;
-    runtime.rdzone_check_f = rdzone_check_f;
-    runtime.rdzone_rm_f = rdzone_rm_f;
-    runtime.rdzone_heaprm_f = rdzone_heaprm_f;
-
+    struct Runtime runtime = {
+        rdzone_add_f,
+        rdzone_check_f,
+        rdzone_rm_f,
+        rdzone_heaprm_f
+    };
+    
     add_runtime_test(test_runtime_f, M);
     return runtime;
 }
@@ -146,15 +147,24 @@ void insert_rdzone_init(Instruction *ptrToStruct, Runtime *runtime, Type *type, 
 
     SmallVector<ReturnInst *> functionExits = {};
     findReturnInsts(&functionExits, ptrToStruct->getParent()->getParent());
-
     for (size_t x = 0; x < elem_count; x++) {
         for (size_t y : structInfo.get()->redzone_offsets) {
             Value *structPtr;
             // create GEP to get pointer to redzone
             builder.SetInsertPoint(ptrToStruct->getNextNode());
-            SmallVector<Value *> indeces = {ConstantInt::get(IntegerType::getInt32Ty(*C), x, false),
-                                            ConstantInt::get(IntegerType::getInt32Ty(*C), y, false)};
-
+            
+            SmallVector<Value *> indices = {};
+            if (auto *alloc_test = dyn_cast<AllocaInst>(ptrToStruct))
+            {
+                if (alloc_test->getAllocatedType()->isArrayTy())
+                {
+                    // Then we have an array of structs with as source an alloca.
+                    // Which means the source is a _pointer_, so we need a 0 at the beginning.
+                    indices.push_back(ConstantInt::get(IntegerType::getInt32Ty(*C), 0, false));
+                }
+            }
+            indices.push_back(ConstantInt::get(IntegerType::getInt32Ty(*C), x, false));
+            indices.push_back(ConstantInt::get(IntegerType::getInt32Ty(*C), y, false));
             PointerType *received_ptr = dyn_cast<PointerType>(ptrToStruct->getType());
             // NOTE: this one is a bit dangerous; it means we will blindly assume any type mismatch can be fixed with a bitcast.
             
@@ -163,7 +173,7 @@ void insert_rdzone_init(Instruction *ptrToStruct, Runtime *runtime, Type *type, 
             } else {
                 structPtr = ptrToStruct;
             }
-            Value *redzone_addr = builder.CreateGEP(type, structPtr, indeces);
+            Value *redzone_addr = builder.CreateGEP(type, structPtr, indices);
 
             // create CALL to void @__rdzone_add(i8*, i64)
             SmallVector<Value *> argsAdd = {
@@ -263,6 +273,7 @@ void insert_heap_free(CallInst *callToFree, struct Runtime *runtime) {
     IRBuilder<> builder(*C);
     Value *freedPtr = callToFree->getArgOperand(0);
     outs() << "The source of the freed ptr: " << *freedPtr << "\n";
+    // TODO: actually insert the free call.
 }
 
 /**
