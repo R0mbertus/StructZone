@@ -26,6 +26,7 @@ int main() {
     examples[1].two[0] = 0;
     examples[1].two[1] = 0;
     examples[1].two[2] = 0;
+    examples[1].three = 0;
     // Print to see what the contents are;
     for (int x = 0; x < 2; x++) {
         printf("zero %i\n", examples[x].zero);
