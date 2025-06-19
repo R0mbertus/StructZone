@@ -279,19 +279,19 @@ void AVLTree::_get_between(Node *root, uint64_t start, uint64_t end, std::vector
              << (root ? root->key : 0);)
     assert(start < end);
     if (root == NULL) {
-        DBG(cout << "\n");
+        DBG(cerr << "\n");
         return;
     } else if (root->key >= start && root->key <= end) {
-        DBG(cout << " M\n");
+        DBG(cerr << " M\n");
         to_Ret->push_back(root);
         _get_between(root->left, start, end, to_Ret);
         _get_between(root->right, start, end, to_Ret);
 
     } else if (root->key > end) {
-        DBG(cout << " L\n");
+        DBG(cerr << " L\n");
         _get_between(root->left, start, end, to_Ret);
     } else if (root->key < start) {
-        DBG(cout << " R\n");
+        DBG(cerr << " R\n");
         _get_between(root->right, start, end, to_Ret);
     }
 }
@@ -317,9 +317,9 @@ void AVLTree::remove_between(uint64_t start, uint64_t end) {
     std::vector<Node *> nodesToRm;
     _get_between(root, start, end, &nodesToRm);
 
-    DBG(cout << "Removing " << nodesToRm.size() << " nodes\n");
+    DBG(cerr << "Removing " << nodesToRm.size() << " nodes\n");
     for (Node *node : nodesToRm) {
-        DBG(cout << "rm " << node->key << "\n");
+        DBG(cerr << "rm " << node->key << "\n");
         RemoveRedzone(node->key);
     }
 }
