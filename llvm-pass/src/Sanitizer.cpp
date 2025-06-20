@@ -9,6 +9,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include "redzone.h"
+#include "functionTransformer.h"
 
 using namespace llvm;
 
@@ -20,6 +21,7 @@ typedef std::map<BitCastInst *, Type *> BitcastMap;
 typedef std::map<LoadInst *, Type *> LoadMap;
 
 struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
+    //mapping from old struct to new struct
     std::map<Type *, std::shared_ptr<StructInfo>> struct_mapping;
 
     // Helper function to deduplicate the sanity checks.
@@ -363,8 +365,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         for (auto &func : M) {
             funcs.push_back(&func);
         }
-        for (Function *func : funcs) {
-            replaceFunctionTypes(func);
+        for (Function* func : funcs)
+        {
+            transformFuncSig(func, &struct_mapping);
         }
 
         for (auto &func : M) {
@@ -440,6 +443,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // we detect a marker value (but what about unaligned reads?)
 
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);
+        populate_delicate_functions();
+        // outs() << "\n\n" << M << "\n\n";
         outs() << "done!\n";
         return PreservedAnalyses::none();
     }

@@ -6,6 +6,8 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
+#ifndef REDZONE_HEADER
+#define REDZONE_HEADER
 using namespace llvm;
 const size_t REDZONE_SIZE = 1;
 
@@ -43,3 +45,4 @@ struct StructInfo {
 
 void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
                         std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo);
+#endif
