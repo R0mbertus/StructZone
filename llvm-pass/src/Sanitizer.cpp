@@ -79,6 +79,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
         struct StructInfo si = {s,
                                 inflated_type,
+                                s,
                                 fields,
                                 dl.getTypeAllocSize(s),
                                 dl.getTypeAllocSize(inflated_type),
@@ -354,7 +355,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // definitions (header files even, perhaps? certainly not libraries)
         for (auto st : M.getIdentifiedStructTypes()) {
             auto si = WalkStruct(st, datalayout, context);
-            struct_mapping[st] = si;
+            struct_mapping[si.get()->inflatedType] = si;
+            struct_mapping[si.get()->deflatedType] = si;
         }
 
         SmallVector<Function *> funcs;

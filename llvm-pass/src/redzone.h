@@ -27,6 +27,8 @@ struct StructInfo {
     StructType *type;
     // The modified struct type that contains redzones.
     StructType *inflatedType;
+    // The original struct that does NOT contain redzones
+    StructType* deflatedType;
     // The fields present in the struct.
     std::vector<FieldInfo> fields;
     // The total size of the struct. Usually slightly more than the summation of the sizes of all
