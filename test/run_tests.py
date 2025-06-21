@@ -29,6 +29,7 @@ SUCCEEDING_TESTS = [
     "toy.nested.safe",
     "toy.safe",
     "toy.funccall_safe",
+    "toy.libc.stat",
 ]
 
 
