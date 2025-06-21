@@ -40,4 +40,4 @@ struct StructInfo {
 };
 
 void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
-                        std::map<CallInst *, StructInfo> *heapStructInfo);
+                        std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo);

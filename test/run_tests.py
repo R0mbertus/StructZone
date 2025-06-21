@@ -38,7 +38,7 @@ def check_test_existence():
         test_name = i.replace(".c", "")
         if (test_name not in SUCCEEDING_TESTS) and (test_name not in FAILING_TESTS):
             print(
-                f"{COLORS["KYEL"]}[WARNING]:{COLORS["KNRM"]} {test_name} not in succeeding or failing tests"
+                f"{COLORS['KYEL']}[WARNING]:{COLORS['KNRM']} {test_name} not in succeeding or failing tests"
             )
 
 

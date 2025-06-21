@@ -203,7 +203,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
     void handle_bitcast(BitCastInst *bitcast_inst, BitcastMap &bitcast_replacements,
                         LLVMContext &context,
-                        std::map<CallInst *, struct StructInfo> *heapStructInfo) {
+                        std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo) {
         // Replace all uses of other insts will take care of src type already.
         if (auto *dest_type = dyn_cast<PointerType>(bitcast_inst->getDestTy())) {
             if (struct_mapping.count(dest_type->getPointerElementType()) == 0) {
@@ -225,7 +225,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         auto *new_size = ConstantInt::get(call_inst->getArgOperand(i)->getType(),
                                                           struct_info->inflatedSize * count);
                         call_inst->setArgOperand(i, new_size);
-                        heapStructInfo->insert({call_inst, *struct_info.get()});
+                        heapStructInfo->insert({call_inst, std::make_tuple(*struct_info.get(), count.getZExtValue())});
 
                     } else {
                         // Note: if we hit this, then (m/re/c)alloc are getting a non-constant size
@@ -348,7 +348,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
         auto datalayout = M.getDataLayout();
         auto &context = M.getContext();
-        std::map<CallInst *, StructInfo> heapStructInfo;
+        std::map<CallInst *, std::tuple<StructInfo, size_t>> heapStructInfo;
 
         // Iterate over all struct types. I believe this one does NOT yet deal with external struct
         // definitions (header files even, perhaps? certainly not libraries)
@@ -434,12 +434,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
         }
         // Some more TODO's:
-        // 1. add redzones for heap struct,
-        // 2. add redzones for nested struct types,
-        // 3. add redzones for arrays of structs,
-        // 4. look into makefile shenanigans to see why IR isn't being outputted/why runtime changes
-        // aren't detected for tests
-        // 5. see if we can move to storing marker values in redzones, and only walking the tree if
+        // see if we can move to storing marker values in redzones, and only walking the tree if
         // we detect a marker value (but what about unaligned reads?)
 
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);
