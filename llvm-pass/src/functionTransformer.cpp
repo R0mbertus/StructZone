@@ -92,6 +92,7 @@ Function *makeInflatedClone(Function *original,
     for (size_t i = 0; i < newFunc->arg_size(); i++) {
         map.insert({original->getArg(i), newFunc->getArg(i)});
     }
+    outs() << "exported func: " << original->getName() << " has a twin: " << newFunc->getName() << "\n";
     SmallVector<ReturnInst *> returns;
     CloneFunctionInto(newFunc, original, map, CloneFunctionChangeType::LocalChangesOnly, returns);
     original->deleteBody();
@@ -109,6 +110,7 @@ Function *makeInflatedWrapper(Function *original,
                               std::map<Type *, std::shared_ptr<StructInfo>> *struct_mapping) {
     bool hasStructArgs;
     Function *newFunc = createInflatedEmpty(original, struct_mapping, &hasStructArgs);
+    outs() << "library func: " << original->getName() << " has a twin " << newFunc->getName() << "\n";
     libraryFuncsToWrap.insert({newFunc, original});
 
     return newFunc;
@@ -117,7 +119,11 @@ Function *makeInflatedWrapper(Function *original,
 void transformFuncSig(Function *original,
                       std::map<Type *, std::shared_ptr<StructInfo>> *struct_mapping) {
     Function *replacement = NULL;
-    if (original->isDeclaration()) {
+    if (original->isIntrinsic())
+    {
+        return;
+    }
+    else if (original->isDeclaration()) {
         replacement = makeInflatedWrapper(original, struct_mapping);
     } else {
         replacement = makeInflatedClone(original, struct_mapping);
@@ -130,10 +136,11 @@ Value* makeStructAccessGEP(IRBuilder<>* b, StructType* structToAccess, Value* pt
         ConstantInt::get(IntegerType::getInt32Ty(*C), 0),
         ConstantInt::get(IntegerType::getInt32Ty(*C), fieldIdx)
     };
-    return b->CreateGEP(structToAccess, ptrToStruct, indeces, "ptrToIdx (deflated)");
+    outs() << "  GEP " <<  structToAccess->getName() << " " << *ptrToStruct << " [0," << fieldIdx << "]\n";
+    return b->CreateGEP(structToAccess, ptrToStruct, indeces, "");
 }
 
-Value *makeDI(Value *original, IRBuilder<>* builder, std::map<Type*,std::shared_ptr<StructInfo>> *struct_mapping) {
+Value *makeDI(Value *deflatedType, IRBuilder<>* builder, std::map<Type*,std::shared_ptr<StructInfo>> *struct_mapping) {
     /**
      * If structype:
      *   Allocate a struct
@@ -148,53 +155,80 @@ Value *makeDI(Value *original, IRBuilder<>* builder, std::map<Type*,std::shared_
      *   deref the pointer,
      */
     LLVMContext* C = &builder->getContext();
-    if (original->getType()->isStructTy())
+    if (deflatedType->getType()->isStructTy())
     {
-        /* this case is complicated */
+        /* this case is extremely complicated */
+        assert(false);
     } 
-    else if (original->getType()->isArrayTy())
+    else if (deflatedType->getType()->isArrayTy())
     {
         /* code */
+        assert(false);
     }
-    else if (original->getType()->isPointerTy() && 
-    original->getType()->getPointerElementType()->isStructTy())
+    else if (deflatedType->getType()->isPointerTy() && 
+    deflatedType->getType()->getPointerElementType()->isStructTy())
     {
-        StructType* deflatedStruct = dyn_cast<StructType>(original->getType()->getPointerElementType());
-        StructInfo* info = struct_mapping->at(deflatedStruct).get();
-        assert(deflatedStruct);
-        Value* inflatedStruct = builder->CreateAlloca(info->inflatedType, 0, "deflated (DI)");
+        outs() << "inserting inflator for " << *deflatedType << "\n";
+        StructType* deflType = dyn_cast<StructType>(deflatedType->getType()->getPointerElementType());
+        assert(deflType);
+        StructInfo* info = struct_mapping->at(deflType).get();
+        Value* inflatedStruct = builder->CreateAlloca(info->inflatedType, 0, "");
+        StructType* inflType = info->inflatedType;
         
         int i = 0;
-        for (Type* field : deflatedStruct->elements())
+        for (Type* field : deflType->elements())
         {
-            Value* ptrToDeflField = makeStructAccessGEP(builder, deflatedStruct, original, i);
-            Value* ptrToIdxInflField = makeStructAccessGEP(builder, deflatedStruct, original, i);
+            Value* ptrToDeflField = makeStructAccessGEP(builder, deflType, deflatedType, i);
+            Value* ptrToInflField = makeStructAccessGEP(builder, inflType, inflatedStruct, i);
             info->offsetMapping.at(i);
             i++; 
             Value* sizeofField = createSizeof(builder, field);
-            CallInst* memcpy = builder->CreateMemCpy(ptrToIdxInflField, MaybeAlign(),  
+            CallInst* memcpy = builder->CreateMemCpy(ptrToInflField, MaybeAlign(),  
                 ptrToDeflField, MaybeAlign(), sizeofField);
         }
+        return inflatedStruct;
     } else {
         outs() << "Value does not have to be copied\n";
-        return original;
+        return deflatedType;
     }
 }
 
-Value *makeID(Value *original, IRBuilder<>* builder, std::map<Type*,std::shared_ptr<StructInfo>> *struct_mapping) {
+Value *makeID(Value *inflatedType, IRBuilder<>* builder, std::map<Type*,std::shared_ptr<StructInfo>> *struct_mapping) {
     LLVMContext* C = &builder->getContext();
-    if (original->getType()->isStructTy())
+    if (inflatedType->getType()->isStructTy())
     {
         /* this case is complicated */
+        assert(false);
     } 
-    else if (original->getType()->isArrayTy())
+    else if (inflatedType->getType()->isArrayTy())
     {
         /* code */
+        assert(false);
     }
-    else if (original->getType()->isPointerTy() && 
-    original->getType()->getPointerElementType()->isStructTy()){
-        StructType* inflatedStruct = dyn_cast<StructType>(original->getType()->getPointerElementType());
-        StructInfo* info = struct_mapping->at(inflatedStruct).get();
+    else if (inflatedType->getType()->isPointerTy() && 
+    inflatedType->getType()->getPointerElementType()->isStructTy()){
+        outs() << "inserting deflator for " << *inflatedType << "\n";
+        StructType* inflType = dyn_cast<StructType>(inflatedType->getType()->getPointerElementType());
+        assert(inflType);
+        StructInfo* info = struct_mapping->at(inflType).get();
+        Value* deflatedStruct = builder->CreateAlloca(info->deflatedType, 0, "");
+        outs() << "  <-- " << *deflatedStruct << "\n";
+        StructType* deflType = info->deflatedType;
+        
+        int i = 0;
+        for(Type* field : info->deflatedType->elements()){
+            Value* ptrToDeflField = makeStructAccessGEP(builder, deflType, deflatedStruct, i);
+            Value* ptrToInflField = makeStructAccessGEP(builder, inflType, inflatedType, i);
+            info->offsetMapping.at(i);
+            i++; 
+            Value* sizeofField = createSizeof(builder, field);
+            CallInst* memcpy = builder->CreateMemCpy(ptrToInflField, MaybeAlign(),  
+                ptrToDeflField, MaybeAlign(), sizeofField);
+        }
+        return deflatedStruct;
+    }
+    else{
+        return inflatedType;
     }
 }
 
@@ -221,9 +255,14 @@ void populate_delicate_functions(std::map<Type*,std::shared_ptr<StructInfo>> *de
             deflatedArgs.push_back(makeID(&infArg, &builder, defl2info));
         }
         CallInst* deflRetVal = builder.CreateCall(originalFunc, deflatedArgs);
-        builder.SetInsertPoint(deflRetVal);
-        Value* inflRetVal = makeDI(deflRetVal, &builder, defl2info);
-        builder.CreateRet(inflRetVal);
+        
+        if (originalFunc->getReturnType() != Type::getVoidTy(*C))
+        {
+            Value* inflRetVal = makeDI(deflRetVal, &builder, defl2info);
+            builder.CreateRet(inflRetVal);
+        } else{
+            builder.CreateRet(NULL);
+        }
     }
     for (std::pair<Function*, Function*> pair : exportedFuncsToWrap){
         Function* inflatedFunc = pair.first;
@@ -239,7 +278,13 @@ void populate_delicate_functions(std::map<Type*,std::shared_ptr<StructInfo>> *de
             inflatedArgs.push_back(makeDI(&infArg, &builder, defl2info));
         }
         CallInst* inflRetVal = builder.CreateCall(inflatedFunc, inflatedArgs);
-        builder.SetInsertPoint(inflRetVal);
-        Value* deflRetVal = makeID(inflRetVal, &builder, defl2info);
+        
+        if (originalFunc->getReturnType() != Type::getVoidTy(*C))
+        {
+            Value* deflRetVal = makeID(inflRetVal, &builder, defl2info);
+            builder.CreateRet(deflRetVal);
+        } else{
+            builder.CreateRet(NULL);
+        }
     }
 }
