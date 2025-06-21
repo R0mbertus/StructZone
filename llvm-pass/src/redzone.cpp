@@ -334,7 +334,8 @@ void insert_heap_free(CallInst *callToFree, struct Runtime *runtime,
     builder.SetInsertPoint(callToFree->getNextNode());
     builder.CreateCall(runtime->rdzone_rm_between_f, args);
 }
-
+// TODO: create an example with pointers
+// create an example with pointers and arrs both
 /**
  * Takes a module with inflated structs, and sets up actual redzones in the inflations.
  * @param redzoneInfo Should contain information about which struct fields are redzones

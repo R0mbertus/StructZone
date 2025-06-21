@@ -1,4 +1,5 @@
 #include <map>
+#include <stack>
 
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -49,19 +50,47 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             FieldInfo field = {
                 fieldType,
                 nullptr,
-                dl.getTypeAllocSize(fieldType),
+                // If its not sized, this call would fail anyway.
+                fieldType->isSized() ? dl.getTypeAllocSize(fieldType) : 0u,
             };
-            if (auto *structType = dyn_cast<StructType>(fieldType)) {
-                field.structInfo = WalkStruct(structType, dl, ctx);
+            std::stack<std::tuple<bool, size_t>> nestingInfo;
+            auto *currType = fieldType;
+            do {
+            	if (auto *arrayType = dyn_cast<ArrayType>(currType)) {
+            		nestingInfo.push(std::make_tuple(true, arrayType->getNumElements()));
+            		currType = arrayType->getElementType();
+            	} else if (auto *ptrType = dyn_cast<PointerType>(currType)) {
+            		nestingInfo.push(std::make_tuple(false, -1));
+            		currType = ptrType->getPointerElementType();
+            	} else if (!currType->isStructTy()) {
+            		// Not a known type that can contain other types within, so just end the loop
+            		currType = nullptr;
+            	}
+            }
+            while (currType && !currType->isStructTy());
+            
+            if (!currType) {
+            	mappedFields.push_back(fieldType);
+            } else {
+            	// Now, we can recurse over the struct type we found.
+            	auto innerStructInfo = WalkStruct(dyn_cast<StructType>(currType), dl, ctx);
+            	// TODO: while this correctly indicates that somewhere inside the type, there is an inflated struct, this doesn't tell us where.
+            	// we should probably move the unpacking/repacking to a separate method, or otherwise store the information somewhere.
+            	field.structInfo = innerStructInfo;
+            	// And then, we need to re-create the types.
+            	Type *inflatedInnerType = innerStructInfo->inflatedType;
+            	while (nestingInfo.size() > 0) {
+            		auto tup = nestingInfo.top();
+            		nestingInfo.pop();
+            		if (std::get<0>(tup)) {
+            			inflatedInnerType = ArrayType::get(inflatedInnerType, std::get<1>(tup));
+            		} else {
+            			inflatedInnerType = PointerType::get(inflatedInnerType, 0); // default address space
+            		}
+            	}
+            	mappedFields.push_back(inflatedInnerType);
             }
             fields.push_back(field);
-            // Here, we push either the original field type, _or_ the inflated variant if we are
-            // dealing with nested structs.
-            if (field.structInfo) {
-                mappedFields.push_back(field.structInfo->inflatedType);
-            } else {
-                mappedFields.push_back(fieldType);
-            }
             // and an array of chars with a given size to store the redzone in.
             redzone_offsets.push_back(mappedFields.size());
             mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));

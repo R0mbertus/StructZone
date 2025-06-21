@@ -19,7 +19,7 @@ FAILING_TESTS = [
     "toy.heap.internal_overflow",
     "toy.internal_overflow",
     "toy.nested.internal_overflow",
-    "toy.funccall_overflow",
+    "toy.funccall.external_overflow",
 ]
 
 SUCCEEDING_TESTS = [
@@ -28,7 +28,8 @@ SUCCEEDING_TESTS = [
     "toy.heap.safe",
     "toy.nested.safe",
     "toy.safe",
-    "toy.funccall_safe",
+    "toy.funccall.safe",
+    "toy.nested.arr.safe",
 ]
 
 
@@ -38,7 +39,7 @@ def check_test_existence():
         test_name = i.replace(".c", "")
         if (test_name not in SUCCEEDING_TESTS) and (test_name not in FAILING_TESTS):
             print(
-                f"{COLORS['KYEL']}[WARNING]:{COLORS['KNRM']} {test_name} not in succeeding or failing tests"
+                f"{COLORS['KYEL']}[WARNING]{COLORS['KNRM']} {test_name} not in succeeding or failing tests"
             )
 
 
@@ -57,12 +58,12 @@ def run_test():
             sp.check_call(["gcc", f"./src/{i}.c", "-o", f"./bin/{i}.orig"])
             orig_res = sp.run([f"./bin/{i}.orig"], capture_output=True, text=True)
             if orig_res.stdout != res.stdout:
-                print(f"{COLORS['KRED'] }[FAILED]{COLORS['KNRM']} {i}")
+                print(f"{COLORS['KRED']}[FAILED]{COLORS['KNRM']} {i}")
                 print("Exit code is correct, but program behaviour has been altered!")
                 print(f"Expected: \n{orig_res.stdout}\nBut got:\n{res.stdout}")
                 continue
         elif "ILLEGAL ACCESS AT" not in res.stderr:
-            print(f"{COLORS['KRED'] }[FAILED]{COLORS['KNRM']} {i}")
+            print(f"{COLORS['KRED']}[FAILED]{COLORS['KNRM']} {i}")
             print(
                 f"Expected stderr to contain the sanitizer error message, but this did not happen."
             )
