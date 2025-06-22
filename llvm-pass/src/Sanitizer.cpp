@@ -246,11 +246,11 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     }
                 };
 
-                if (call_inst->getCalledFunction()->getName().equals("malloc")) {
+                if (call_inst->getCalledFunction()->getName().equals("malloc.inflated")) {
                     // If malloc, we need to update the first argument to the inflated size.
                     update_size(0);
-                } else if (call_inst->getCalledFunction()->getName().equals("calloc") ||
-                           call_inst->getCalledFunction()->getName().equals("realloc")) {
+                } else if (call_inst->getCalledFunction()->getName().equals("calloc.inflated") ||
+                           call_inst->getCalledFunction()->getName().equals("realloc.inflated")) {
                     // If calloc or realloc, we need to update the second argument to the inflated
                     // size.
                     update_size(1);
