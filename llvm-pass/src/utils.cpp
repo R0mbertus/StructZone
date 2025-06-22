@@ -13,7 +13,8 @@ Value* createSizeof(IRBuilder<>* builder, Type* accessedType){
     SmallVector<Value *> one = {
         ConstantInt::get(IntegerType::getInt8Ty(builder->getContext()), APInt(8, 1))};
     ConstantPointerNull *typedNullPtr = ConstantPointerNull::get(PointerType::get(accessedType, 0));
-    Value *sizeofPtr = builder->CreateGEP(accessedType, typedNullPtr, one);
+    
+    Value *sizeofPtr = builder->CreateGEP(accessedType, typedNullPtr, one, "sizeof()");
     Value *sizeofInt = builder->CreatePtrToInt(sizeofPtr, IntegerType::getInt8Ty(builder->getContext()));
     return sizeofInt;
 }

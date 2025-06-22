@@ -42,7 +42,7 @@ struct StructInfo {
     std::map<size_t, size_t> offsetMapping;
     std::vector<size_t> redzone_offsets;
 };
-
+typedef std::map<Type*,std::shared_ptr<StructInfo>> StructMap;
 void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
                         std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo);
 #endif
