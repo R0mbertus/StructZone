@@ -22,9 +22,9 @@ int main() {
     assert(stat_buf.st_gid == 0);
     printf("st_rdev : %ld \n", stat_buf.st_rdev);
     printf("st_size : %ld \n", stat_buf.st_size);
-    assert(stat_buf.st_size == 1);
+    assert(stat_buf.st_size == 13);
     printf("st_blksize : %ld \n", stat_buf.st_blksize);
-    assert(stat_buf.st_size == 4096);
+    assert(stat_buf.st_blksize == 4096);
     printf("st_blocks : %ld \n", stat_buf.st_blocks);
     assert(stat_buf.st_blocks == 8);
     return 0;

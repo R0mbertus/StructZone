@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include "Runtime.h"
 
 struct Simple {
     int zero;
@@ -9,6 +10,7 @@ struct Simple {
 };
 
 void func(struct Simple *example) {
+    __rdzone_dbg_print();
     for (int i = -4; i < 5; i++) {
         example->one[i] = 0;
     }
