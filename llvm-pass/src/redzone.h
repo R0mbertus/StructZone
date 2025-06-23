@@ -6,6 +6,8 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
+#ifndef REDZONE_HEADER
+#define REDZONE_HEADER
 using namespace llvm;
 const size_t REDZONE_SIZE = 1;
 
@@ -27,6 +29,8 @@ struct StructInfo {
     StructType *type;
     // The modified struct type that contains redzones.
     StructType *inflatedType;
+    // The original struct that does NOT contain redzones
+    StructType* deflatedType;
     // The fields present in the struct.
     std::vector<FieldInfo> fields;
     // The total size of the struct. Usually slightly more than the summation of the sizes of all
@@ -38,6 +42,7 @@ struct StructInfo {
     std::map<size_t, size_t> offsetMapping;
     std::vector<size_t> redzone_offsets;
 };
-
+typedef std::map<Type*,std::shared_ptr<StructInfo>> StructMap;
 void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
                         std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo);
+#endif
