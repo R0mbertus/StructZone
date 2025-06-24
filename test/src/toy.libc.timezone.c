@@ -2,7 +2,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-int main(){
+int main() {
     struct timeval tv;
 
     int time = gettimeofday(&tv, NULL);

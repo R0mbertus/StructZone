@@ -5,7 +5,7 @@ struct Simple {
     char one[2];
     char two[3];
     char three;
-    struct Simple* self;
+    struct Simple *self;
 };
 
 int main() {

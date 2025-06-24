@@ -1,7 +1,7 @@
-#include <stdio.h>
-#include <fcntl.h>
-#include <sys/stat.h>
 #include <assert.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
 #define FILE_PATH "/etc/hostname"
 

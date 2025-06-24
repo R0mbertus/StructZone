@@ -1,6 +1,6 @@
+#include "Runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "Runtime.h"
 
 struct Simple {
     int zero;

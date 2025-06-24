@@ -6,26 +6,25 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Support/FileSystem.h"
 
-
-#include "redzone.h"
 #include "functionTransformer.h"
+#include "redzone.h"
 #include <fstream>
 
 using namespace llvm;
 
 namespace {
 // typedefs for the long types we use in the pass.
-typedef std::vector<std::tuple<GetElementPtrInst *,Type *, std::vector<Value *>>> GepMap;
+typedef std::vector<std::tuple<GetElementPtrInst *, Type *, std::vector<Value *>>> GepMap;
 typedef std::map<Instruction *, std::tuple<Type *, Value *>> AllocaMap;
 typedef std::vector<std::pair<BitCastInst *, Type *>> BitcastMap;
 typedef std::vector<std::pair<LoadInst *, Type *>> LoadMap;
 
 struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
-    //mapping from old struct to new struct
+    // mapping from old struct to new struct
     std::map<Type *, std::shared_ptr<StructInfo>> struct_mapping;
 
     // Helper function to deduplicate the sanity checks.
@@ -38,11 +37,11 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             abort();
         }
     }
-    
+
     // Performs a _shallow_ walk over all the fields of the struct.
     // In particular, this means pointer types will not be updated, to avoid infinite recursion.
     std::shared_ptr<StructInfo> ShallowWalk(StructType *s, DataLayout &dl, LLVMContext &ctx) {
-		// Metadata info on each field of the struct
+        // Metadata info on each field of the struct
         std::vector<FieldInfo> fields;
         // The fields, but with redzone types inserted in between them.
         std::vector<Type *> mappedFields;
@@ -51,46 +50,48 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // We add a redzone before the first field, so that we can detect underflows.
         // However, if the type is opaque (i.e., a forward declaration), we should not touch it.
         if (!s->isOpaque()) {
-		    redzone_offsets.push_back(mappedFields.size());
-		    mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
+            redzone_offsets.push_back(mappedFields.size());
+            mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
         }
         size_t base_offset = 0;
         for (auto fieldType : s->elements()) {
             FieldInfo field = {
-                fieldType,
-                nullptr,
-                fieldType->isSized() ? dl.getTypeAllocSize(fieldType) : 0ul, // Let us hope 0 is a reasonable default
+                fieldType, nullptr,
+                fieldType->isSized() ? dl.getTypeAllocSize(fieldType)
+                                     : 0ul, // Let us hope 0 is a reasonable default
             };
             std::stack<size_t> nestingInfo;
             auto *currType = fieldType;
             do {
-            	// Note that we explicitly avoid walking over pointer types here, to make sure the walk is shallow.
-            	if (auto *arrayType = dyn_cast<ArrayType>(currType)) {
-            		nestingInfo.push(arrayType->getNumElements());
-            		currType = arrayType->getElementType();
-            	}else if (!currType->isStructTy()) {
-            		// Not a known type that can contain other types within, so just end the loop
-            		currType = nullptr;
-            	}
-            }
-            while (currType && !currType->isStructTy());
-            
+                // Note that we explicitly avoid walking over pointer types here, to make sure the
+                // walk is shallow.
+                if (auto *arrayType = dyn_cast<ArrayType>(currType)) {
+                    nestingInfo.push(arrayType->getNumElements());
+                    currType = arrayType->getElementType();
+                } else if (!currType->isStructTy()) {
+                    // Not a known type that can contain other types within, so just end the loop
+                    currType = nullptr;
+                }
+            } while (currType && !currType->isStructTy());
+
             if (!currType) {
-            	mappedFields.push_back(fieldType);
+                mappedFields.push_back(fieldType);
             } else {
-            	// Now, we can recurse over the struct type we found.
-            	auto innerStructInfo = ShallowWalk(dyn_cast<StructType>(currType), dl, ctx);
-            	// TODO: while this correctly indicates that somewhere inside the type, there is an inflated struct, this doesn't tell us where.
-            	// we should probably move the unpacking/repacking to a separate method, or otherwise store the information somewhere.
-            	field.structInfo = innerStructInfo;
-            	// And then, we need to re-create the types.
-            	Type *inflatedInnerType = innerStructInfo->inflatedType;
-            	while (nestingInfo.size() > 0) {
-            		auto size = nestingInfo.top();
-            		nestingInfo.pop();
-            		inflatedInnerType = ArrayType::get(inflatedInnerType, size);
-            	}
-            	mappedFields.push_back(inflatedInnerType);
+                // Now, we can recurse over the struct type we found.
+                auto innerStructInfo = ShallowWalk(dyn_cast<StructType>(currType), dl, ctx);
+                // TODO: while this correctly indicates that somewhere inside the type, there is an
+                // inflated struct, this doesn't tell us where. we should probably move the
+                // unpacking/repacking to a separate method, or otherwise store the information
+                // somewhere.
+                field.structInfo = innerStructInfo;
+                // And then, we need to re-create the types.
+                Type *inflatedInnerType = innerStructInfo->inflatedType;
+                while (nestingInfo.size() > 0) {
+                    auto size = nestingInfo.top();
+                    nestingInfo.pop();
+                    inflatedInnerType = ArrayType::get(inflatedInnerType, size);
+                }
+                mappedFields.push_back(inflatedInnerType);
             }
             fields.push_back(field);
             // and an array of chars with a given size to store the redzone in.
@@ -108,74 +109,71 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             inflated_type->setBody(ArrayRef<Type *>(mappedFields));
         }
 
-        struct StructInfo si = {s,
-                                inflated_type,
-                                s,
-                                fields,
+        struct StructInfo si = {s, inflated_type, s, fields,
                                 // For an opaque struct, we of course cannot infer the size.
-                                s->isSized() ? dl.getTypeAllocSize(s) : 0ul, 
+                                s->isSized() ? dl.getTypeAllocSize(s) : 0ul,
                                 inflated_type->isSized() ? dl.getTypeAllocSize(inflated_type) : 0ul,
-                                offset_mapping,
-                                redzone_offsets};
+                                offset_mapping, redzone_offsets};
         return std::make_shared<StructInfo>(si);
     }
-    
+
     // Performs a deep walk on all struct types that are already shallowly inflated,
     // by also considering pointers (and thus, self-referential types).
     void DeepWalk(DataLayout &dl, LLVMContext &ctx) {
-    	for (const auto &[type, si] : struct_mapping) {
-    		if (si->type->isOpaque()) {
-    			continue;
-    		}
-    		std::vector<Type *> mappedFields;
-    		mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
-    		int idx = 0;
-    		for (auto fieldType : si->type->elements()) {
-		        std::stack<std::tuple<bool, size_t>> nestingInfo;
-		        auto *currType = fieldType;
-		        do {
-		        	if (auto *arrayType = dyn_cast<ArrayType>(currType)) {
-		        		nestingInfo.push(std::make_tuple(true, arrayType->getNumElements()));
-		        		currType = arrayType->getElementType();
-		        	} else if (auto *ptrType = dyn_cast<PointerType>(currType)) {
-		        	    nestingInfo.push(std::make_tuple(false, 0));
-		        	    currType = ptrType->getPointerElementType();
-		        	} else if (!currType->isStructTy()) {
-		        		// Not a known type that can contain other types within, so just end the loop
-		        		currType = nullptr;
-		        	}
-		        }
-		        while (currType && !currType->isStructTy());
-		        
-		        if (!currType) {
-		        	mappedFields.push_back(fieldType);
-		        } else {
-		        	// Now, we can look up the struct we found
-		        	auto innerStructInfo = struct_mapping[currType];
-		        	// Update it here, in case we missed it the first time around
-		        	si->fields[idx].structInfo = innerStructInfo;
-		        	// And then, we need to re-create the types.
-		        	Type *inflatedInnerType = innerStructInfo->inflatedType;
-		        	while (nestingInfo.size() > 0) {
-		        		auto tup = nestingInfo.top();
-		        		nestingInfo.pop();
-		        		if (std::get<0>(tup)) {
-		        			inflatedInnerType = ArrayType::get(inflatedInnerType, std::get<1>(tup));
-		        		} else {
-		        			inflatedInnerType = PointerType::get(inflatedInnerType, 0); // default address space
-		        		}
-		        	}
-		        	mappedFields.push_back(inflatedInnerType);
-		        }
-		        // and an array of chars with a given size to store the redzone in.
-		        mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
-		        idx += 1;
-		    }
-		    // update the body of the inflated type again, to correct pointer types.
-		    si->inflatedType->setBody(ArrayRef<Type *>(mappedFields));
-    	}
+        for (const auto &[type, si] : struct_mapping) {
+            if (si->type->isOpaque()) {
+                continue;
+            }
+            std::vector<Type *> mappedFields;
+            mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
+            int idx = 0;
+            for (auto fieldType : si->type->elements()) {
+                std::stack<std::tuple<bool, size_t>> nestingInfo;
+                auto *currType = fieldType;
+                do {
+                    if (auto *arrayType = dyn_cast<ArrayType>(currType)) {
+                        nestingInfo.push(std::make_tuple(true, arrayType->getNumElements()));
+                        currType = arrayType->getElementType();
+                    } else if (auto *ptrType = dyn_cast<PointerType>(currType)) {
+                        nestingInfo.push(std::make_tuple(false, 0));
+                        currType = ptrType->getPointerElementType();
+                    } else if (!currType->isStructTy()) {
+                        // Not a known type that can contain other types within, so just end the
+                        // loop
+                        currType = nullptr;
+                    }
+                } while (currType && !currType->isStructTy());
+
+                if (!currType) {
+                    mappedFields.push_back(fieldType);
+                } else {
+                    // Now, we can look up the struct we found
+                    auto innerStructInfo = struct_mapping[currType];
+                    // Update it here, in case we missed it the first time around
+                    si->fields[idx].structInfo = innerStructInfo;
+                    // And then, we need to re-create the types.
+                    Type *inflatedInnerType = innerStructInfo->inflatedType;
+                    while (nestingInfo.size() > 0) {
+                        auto tup = nestingInfo.top();
+                        nestingInfo.pop();
+                        if (std::get<0>(tup)) {
+                            inflatedInnerType = ArrayType::get(inflatedInnerType, std::get<1>(tup));
+                        } else {
+                            inflatedInnerType =
+                                PointerType::get(inflatedInnerType, 0); // default address space
+                        }
+                    }
+                    mappedFields.push_back(inflatedInnerType);
+                }
+                // and an array of chars with a given size to store the redzone in.
+                mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
+                idx += 1;
+            }
+            // update the body of the inflated type again, to correct pointer types.
+            si->inflatedType->setBody(ArrayRef<Type *>(mappedFields));
+        }
     }
-    
+
     void handle_gep(GetElementPtrInst *gep_inst, GepMap &gep_replacements, LLVMContext &context) {
         auto src_type = gep_inst->getSourceElementType();
         int count = 0;
@@ -314,7 +312,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         auto *new_size = ConstantInt::get(call_inst->getArgOperand(i)->getType(),
                                                           struct_info->inflatedSize * count);
                         call_inst->setArgOperand(i, new_size);
-                        heapStructInfo->insert({call_inst, std::make_tuple(*struct_info.get(), count.getZExtValue())});
+                        heapStructInfo->insert(
+                            {call_inst, std::make_tuple(*struct_info.get(), count.getZExtValue())});
 
                     } else {
                         // Note: if we hit this, then (m/re/c)alloc are getting a non-constant size
@@ -341,8 +340,10 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
 
             // Then, we can replace the type with the inflated type.
-            bitcast_replacements.push_back(std::pair<BitCastInst*, Type*>(bitcast_inst, PointerType::getUnqual(
-                struct_mapping[dest_type->getPointerElementType()]->inflatedType)));
+            bitcast_replacements.push_back(std::pair<BitCastInst *, Type *>(
+                bitcast_inst,
+                PointerType::getUnqual(
+                    struct_mapping[dest_type->getPointerElementType()]->inflatedType)));
         }
     }
 
@@ -355,8 +356,10 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
 
             // Replace with pointer to inflated type.
-            load_replacements.push_back(std::pair<LoadInst*, Type*>(load_inst, PointerType::getUnqual(
-                struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType)));
+            load_replacements.push_back(std::pair<LoadInst *, Type *>(
+                load_inst,
+                PointerType::getUnqual(
+                    struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType)));
         }
     }
 
@@ -434,7 +437,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         func->deleteBody();
     }
 
-    void save_mod(Module *M){
+    void save_mod(Module *M) {
         std::error_code EC;
         raw_fd_ostream out("./last_executed_module.ll", EC, sys::fs::OF_Text);
         if (EC) {
@@ -457,13 +460,12 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             struct_mapping[si.get()->deflatedType] = si;
         }
         DeepWalk(datalayout, context);
-        
+
         SmallVector<Function *> funcs;
         for (auto &func : M) {
             funcs.push_back(&func);
         }
-        for (Function* func : funcs)
-        {
+        for (Function *func : funcs) {
             transformFuncSig(func, &struct_mapping);
         }
         for (auto &func : M) {
@@ -498,7 +500,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
             IRBuilder<> builder(context);
             for (const auto &[inst, tup] : alloca_replacements) {
-                outs() << "  + " << *inst  << "; SHOULD CHANGE TO " << *std::get<0>(tup) << "\n";
+                outs() << "  + " << *inst << "; SHOULD CHANGE TO " << *std::get<0>(tup) << "\n";
                 builder.SetInsertPoint(inst);
                 // Note: the second element will be null for non-arrays.
                 auto *newInst = builder.CreateAlloca(std::get<0>(tup), std::get<1>(tup));
@@ -541,7 +543,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);
         populate_delicate_functions(&struct_mapping, &M.getContext());
         save_mod(&M);
-        
+
         return PreservedAnalyses::none();
     }
 };

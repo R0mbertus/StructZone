@@ -32,7 +32,7 @@ int main() {
     example.one = inner;
     // Print to see what the contents are;
     for (int i = 0; i < 4; i++) {
-    	printf("outer zero %i %i\n", i, example.zero[i]);
+        printf("outer zero %i %i\n", i, example.zero[i]);
     }
     printf("inner zero %i\n", example.one->zero);
     for (int i = 0; i < 2; i++) {

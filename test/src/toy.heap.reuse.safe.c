@@ -32,9 +32,8 @@ int main() {
     // The inflated size of Simple is 20. So if we pass it exactly 20,
     // the default allocator from malloc should give us the same block that we have just freed.
     int *second_example = malloc(20);
-    for (int i = 0; i < 20; i++)
-    {
-    	*(second_example + i) = 0;
+    for (int i = 0; i < 20; i++) {
+        *(second_example + i) = 0;
     }
     free(second_example);
     return 0;
