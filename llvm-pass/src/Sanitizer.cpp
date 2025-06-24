@@ -106,7 +106,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         auto inflated_type = StructType::getTypeByName(ctx, s->getName().str() + ".inflated");
         if (inflated_type == NULL) {
             inflated_type = StructType::create(ctx, s->getName().str() + ".inflated");
-            inflated_type->setBody(ArrayRef<Type *>(mappedFields));
+            if (mappedFields.size() > 0) {
+            	inflated_type->setBody(ArrayRef<Type *>(mappedFields));
+            }
         }
 
         struct StructInfo si = {s, inflated_type, s, fields,
@@ -524,6 +526,17 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             save_mod(&M);
             for (const auto &[inst, type, value] : gep_replacements) {
                 builder.SetInsertPoint(inst);
+                // TODO: debug this, its failing at some point
+                errs() << "TEST inst: ";
+                inst->print(errs());
+                errs() << "\nTEST type: ";
+                type->print(errs());
+                errs() << "\nTEST val: ";
+                for (auto * val: value) {
+                	val->print(errs());
+                	errs() << " - ";
+                }
+                errs() << "\n";
                 auto *newInst = builder.CreateGEP(
                     type,
                     // NOTE: we _cannot_ move this to the other loop, because this gets altered by

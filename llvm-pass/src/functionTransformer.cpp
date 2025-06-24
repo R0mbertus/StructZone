@@ -96,11 +96,16 @@ Function *makeInflatedClone(Function *original, StructMap *struct_mapping) {
     ValueToValueMapTy map;
 
     Function *newFunc = createInflatedEmpty(original, struct_mapping, &hasStructArgs);
-    for (size_t i = 0; i < newFunc->arg_size(); i++) {
-        map.insert({original->getArg(i), newFunc->getArg(i)});
-    }
     errs() << "exported func: " << original->getName() << " has a twin: " << newFunc->getName()
            << "\n";
+    for (size_t i = 0; i < newFunc->arg_size(); i++) {
+        errs() << "arg " << i << " is ";
+        original->getArg(i)->print(errs());
+        errs() << "\t";
+        original->getArg(i)->getType()->print(errs());
+        errs() << "\n";
+        map.insert({original->getArg(i), newFunc->getArg(i)});
+    }
     SmallVector<ReturnInst *> returns;
     CloneFunctionInto(newFunc, original, map, CloneFunctionChangeType::LocalChangesOnly, returns);
     original->deleteBody();
