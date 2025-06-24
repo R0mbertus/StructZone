@@ -320,7 +320,7 @@ void insert_heap_free(CallInst *callToFree, struct Runtime *runtime,
     }
     auto *allocationSource = *allocations.begin();
     Value *allocationSize = nullptr;
-    if (allocationSource->getCalledFunction()->getName().equals("malloc")) {
+    if (allocationSource->getCalledFunction()->getName().equals("malloc.inflated")) {
         allocationSize = allocationSource->getArgOperand(0);
     } else { // Then it needs to be calloc or realloc, because it would not have been in heap struct
              // info otherwise.
@@ -334,7 +334,8 @@ void insert_heap_free(CallInst *callToFree, struct Runtime *runtime,
     builder.SetInsertPoint(callToFree->getNextNode());
     builder.CreateCall(runtime->rdzone_rm_between_f, args);
 }
-
+// TODO: create an example with pointers
+// create an example with pointers and arrs both
 /**
  * Takes a module with inflated structs, and sets up actual redzones in the inflations.
  * @param redzoneInfo Should contain information about which struct fields are redzones
@@ -387,7 +388,7 @@ void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo
                                        std::get<1>(tup), redzoneInfo);
                     continue;
                 } else if (callInst && callInst->getCalledFunction() &&
-                           callInst->getCalledFunction()->getName().equals("free")) {
+                           callInst->getCalledFunction()->getName().equals("free.inflated")) {
                     insert_heap_free(callInst, &runtime, heapStructInfo);
                 }
             }

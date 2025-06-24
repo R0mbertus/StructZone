@@ -1,4 +1,5 @@
 #include <map>
+#include <stack>
 
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -7,19 +8,24 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Support/FileSystem.h"
+
 
 #include "redzone.h"
+#include "functionTransformer.h"
+#include <fstream>
 
 using namespace llvm;
 
 namespace {
 // typedefs for the long types we use in the pass.
-typedef std::map<GetElementPtrInst *, std::tuple<Type *, std::vector<Value *>>> GepMap;
+typedef std::vector<std::tuple<GetElementPtrInst *,Type *, std::vector<Value *>>> GepMap;
 typedef std::map<Instruction *, std::tuple<Type *, Value *>> AllocaMap;
-typedef std::map<BitCastInst *, Type *> BitcastMap;
-typedef std::map<LoadInst *, Type *> LoadMap;
+typedef std::vector<std::pair<BitCastInst *, Type *>> BitcastMap;
+typedef std::vector<std::pair<LoadInst *, Type *>> LoadMap;
 
 struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
+    //mapping from old struct to new struct
     std::map<Type *, std::shared_ptr<StructInfo>> struct_mapping;
 
     // Helper function to deduplicate the sanity checks.
@@ -49,19 +55,47 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             FieldInfo field = {
                 fieldType,
                 nullptr,
-                dl.getTypeAllocSize(fieldType),
+                // If its not sized, this call would fail anyway.
+                fieldType->isSized() ? dl.getTypeAllocSize(fieldType) : 0u,
             };
-            if (auto *structType = dyn_cast<StructType>(fieldType)) {
-                field.structInfo = WalkStruct(structType, dl, ctx);
+            std::stack<std::tuple<bool, size_t>> nestingInfo;
+            auto *currType = fieldType;
+            do {
+            	if (auto *arrayType = dyn_cast<ArrayType>(currType)) {
+            		nestingInfo.push(std::make_tuple(true, arrayType->getNumElements()));
+            		currType = arrayType->getElementType();
+            	} else if (auto *ptrType = dyn_cast<PointerType>(currType)) {
+            		nestingInfo.push(std::make_tuple(false, -1));
+            		currType = ptrType->getPointerElementType();
+            	} else if (!currType->isStructTy()) {
+            		// Not a known type that can contain other types within, so just end the loop
+            		currType = nullptr;
+            	}
+            }
+            while (currType && !currType->isStructTy());
+            
+            if (!currType) {
+            	mappedFields.push_back(fieldType);
+            } else {
+            	// Now, we can recurse over the struct type we found.
+            	auto innerStructInfo = WalkStruct(dyn_cast<StructType>(currType), dl, ctx);
+            	// TODO: while this correctly indicates that somewhere inside the type, there is an inflated struct, this doesn't tell us where.
+            	// we should probably move the unpacking/repacking to a separate method, or otherwise store the information somewhere.
+            	field.structInfo = innerStructInfo;
+            	// And then, we need to re-create the types.
+            	Type *inflatedInnerType = innerStructInfo->inflatedType;
+            	while (nestingInfo.size() > 0) {
+            		auto tup = nestingInfo.top();
+            		nestingInfo.pop();
+            		if (std::get<0>(tup)) {
+            			inflatedInnerType = ArrayType::get(inflatedInnerType, std::get<1>(tup));
+            		} else {
+            			inflatedInnerType = PointerType::get(inflatedInnerType, 0); // default address space
+            		}
+            	}
+            	mappedFields.push_back(inflatedInnerType);
             }
             fields.push_back(field);
-            // Here, we push either the original field type, _or_ the inflated variant if we are
-            // dealing with nested structs.
-            if (field.structInfo) {
-                mappedFields.push_back(field.structInfo->inflatedType);
-            } else {
-                mappedFields.push_back(fieldType);
-            }
             // and an array of chars with a given size to store the redzone in.
             redzone_offsets.push_back(mappedFields.size());
             mappedFields.push_back(ArrayType::get(Type::getInt8Ty(ctx), REDZONE_SIZE));
@@ -79,6 +113,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
         struct StructInfo si = {s,
                                 inflated_type,
+                                s,
                                 fields,
                                 dl.getTypeAllocSize(s),
                                 dl.getTypeAllocSize(inflated_type),
@@ -161,7 +196,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             } else {
                 res_type = struct_mapping[src_type]->inflatedType;
             }
-            gep_replacements[gep_inst] = std::make_tuple(res_type, replaced_indices);
+            gep_replacements.push_back(std::make_tuple(gep_inst, res_type, replaced_indices));
         } else {
             AssertNonStructType(src_type);
         }
@@ -240,11 +275,11 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     }
                 };
 
-                if (call_inst->getCalledFunction()->getName().equals("malloc")) {
+                if (call_inst->getCalledFunction()->getName().equals("malloc.inflated")) {
                     // If malloc, we need to update the first argument to the inflated size.
                     update_size(0);
-                } else if (call_inst->getCalledFunction()->getName().equals("calloc") ||
-                           call_inst->getCalledFunction()->getName().equals("realloc")) {
+                } else if (call_inst->getCalledFunction()->getName().equals("calloc.inflated") ||
+                           call_inst->getCalledFunction()->getName().equals("realloc.inflated")) {
                     // If calloc or realloc, we need to update the second argument to the inflated
                     // size.
                     update_size(1);
@@ -252,8 +287,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
 
             // Then, we can replace the type with the inflated type.
-            bitcast_replacements[bitcast_inst] = PointerType::getUnqual(
-                struct_mapping[dest_type->getPointerElementType()]->inflatedType);
+            bitcast_replacements.push_back(std::pair<BitCastInst*, Type*>(bitcast_inst, PointerType::getUnqual(
+                struct_mapping[dest_type->getPointerElementType()]->inflatedType)));
         }
     }
 
@@ -266,8 +301,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
 
             // Replace with pointer to inflated type.
-            load_replacements[load_inst] = PointerType::getUnqual(
-                struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType);
+            load_replacements.push_back(std::pair<LoadInst*, Type*>(load_inst, PointerType::getUnqual(
+                struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType)));
         }
     }
 
@@ -345,6 +380,16 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         func->deleteBody();
     }
 
+    void save_mod(Module *M){
+        std::error_code EC;
+        raw_fd_ostream out("./last_executed_module.ll", EC, sys::fs::OF_Text);
+        if (EC) {
+            errs() << "Error opening file " << EC.message() << "\n";
+        }
+        M->print(out, nullptr);
+        outs() << "done!\n";
+    }
+
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
         auto datalayout = M.getDataLayout();
         auto &context = M.getContext();
@@ -354,17 +399,17 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // definitions (header files even, perhaps? certainly not libraries)
         for (auto st : M.getIdentifiedStructTypes()) {
             auto si = WalkStruct(st, datalayout, context);
-            struct_mapping[st] = si;
+            struct_mapping[si.get()->inflatedType] = si;
+            struct_mapping[si.get()->deflatedType] = si;
         }
-
         SmallVector<Function *> funcs;
         for (auto &func : M) {
             funcs.push_back(&func);
         }
-        for (Function *func : funcs) {
-            replaceFunctionTypes(func);
+        for (Function* func : funcs)
+        {
+            transformFuncSig(func, &struct_mapping);
         }
-
         for (auto &func : M) {
             // Then it is an external function, and must be linked. We can't instrument this -
             // though it is probably interesting in a later stage for inflating/deflating structs.
@@ -395,9 +440,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     }
                 }
             }
-
             IRBuilder<> builder(context);
             for (const auto &[inst, tup] : alloca_replacements) {
+                outs() << "  + " << *inst  << "; SHOULD CHANGE TO " << *std::get<0>(tup) << "\n";
                 builder.SetInsertPoint(inst);
                 // Note: the second element will be null for non-arrays.
                 auto *newInst = builder.CreateAlloca(std::get<0>(tup), std::get<1>(tup));
@@ -418,17 +463,17 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 inst->replaceAllUsesWith(newInst);
                 inst->eraseFromParent();
             }
-
-            for (const auto &[inst, tup] : gep_replacements) {
+            save_mod(&M);
+            for (const auto &[inst, type, value] : gep_replacements) {
                 builder.SetInsertPoint(inst);
                 auto *newInst = builder.CreateGEP(
-                    std::get<0>(tup),
+                    type,
                     // NOTE: we _cannot_ move this to the other loop, because this gets altered by
                     // the alloca instruction replacements!
                     inst->getPointerOperand(),
                     // NOTE 2: some internal llvm magic is happening with arrayref; doing it in the
                     // prior loop gives strange failures.
-                    ArrayRef<Value *>(std::get<1>(tup)));
+                    ArrayRef<Value *>(value));
                 inst->replaceAllUsesWith(newInst);
                 inst->eraseFromParent();
             }
@@ -438,7 +483,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         // we detect a marker value (but what about unaligned reads?)
 
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);
-        outs() << "done!\n";
+        populate_delicate_functions(&struct_mapping, &M.getContext());
+        save_mod(&M);
+        
         return PreservedAnalyses::none();
     }
 };
