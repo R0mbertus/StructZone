@@ -22,8 +22,7 @@ When commiting, some pre-commit formatting is done to ensure consistent style in
 ### Tests
 
 There's a directory `test` which contains toy examples that showcase different types of usages of
- structs (and overflows on them). To run them, run `./compile-test.sh <filename without extension>`.
- TODO: update once testing scripts are complete
+ structs (and overflows on them). To run them, simply run `make check` in the top level directory of the project. If you alter the sanitizer, runtime or another component, this should automatically trigger a rebuild, but if you want to be sure, you can manually clean intermediate files with `make clean`.
 
 ### Spec Benchmark
 
