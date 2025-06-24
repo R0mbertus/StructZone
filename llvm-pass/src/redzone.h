@@ -30,7 +30,7 @@ struct StructInfo {
     // The modified struct type that contains redzones.
     StructType *inflatedType;
     // The original struct that does NOT contain redzones
-    StructType* deflatedType;
+    StructType *deflatedType;
     // The fields present in the struct.
     std::vector<FieldInfo> fields;
     // The total size of the struct. Usually slightly more than the summation of the sizes of all
@@ -42,7 +42,7 @@ struct StructInfo {
     std::map<size_t, size_t> offsetMapping;
     std::vector<size_t> redzone_offsets;
 };
-typedef std::map<Type*,std::shared_ptr<StructInfo>> StructMap;
+typedef std::map<Type *, std::shared_ptr<StructInfo>> StructMap;
 void setupRedzoneChecks(std::map<Type *, std::shared_ptr<StructInfo>> *info, Module &M,
                         std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo);
 #endif

@@ -209,20 +209,20 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     // sense on something like an array, which has a homogeneous element type. But
                     // if it is a struct, you no longer have that. Therefore, I assume this
                     // should never happen.
-                    outs() << "ERROR: unknown index type at:";
-                    gep_inst->print(outs());
-                    outs() << " - ";
-                    idx->print(outs());
-                    outs() << "\n";
+                    errs() << "ERROR: unknown index type at:";
+                    gep_inst->print(errs());
+                    errs() << " - ";
+                    idx->print(errs());
+                    errs() << "\n";
                     abort();
                 }
             }
             // We should not encounter unknown type kinds here.
             // If we do, that means we cannot complete the walk over the indices, so we error out.
             else {
-                outs() << "Unknown type ";
-                curr_type->print(outs());
-                outs() << ". This implies either an unknown type _kind_, or an uninflated struct "
+                errs() << "Unknown type ";
+                curr_type->print(errs());
+                errs() << ". This implies either an unknown type _kind_, or an uninflated struct "
                           "type.\n";
                 abort();
             }
@@ -319,11 +319,11 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         // Note: if we hit this, then (m/re/c)alloc are getting a non-constant size
                         // parameter. i dont expect this to happen, but if it does, it should error
                         // out for now so we can ensure its sane to add support for it.
-                        outs() << "ERROR: unknown size type at:";
-                        call_inst->print(outs());
-                        outs() << " - ";
-                        call_inst->getArgOperand(i)->print(outs());
-                        outs() << "\n";
+                        errs() << "ERROR: unknown size type at:";
+                        call_inst->print(errs());
+                        errs() << " - ";
+                        call_inst->getArgOperand(i)->print(errs());
+                        errs() << "\n";
                         abort();
                     }
                 };
@@ -409,7 +409,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         bool hasStructArgs = false;
         SmallVector<Type *> newArgs;
         ValueToValueMapTy map;
-        outs() << "checking function " << func->getName();
+        errs() << "checking function " << func->getName();
 
         for (Argument *a = func->arg_begin(); a < func->arg_end(); a++) {
             Type *newArg = getInflatedType(a->getType(), &hasStructArgs);
@@ -419,7 +419,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             getInflatedType(func->getReturnType(), &hasStructArgs), newArgs, func->isVarArg());
 
         if (!hasStructArgs) {
-            outs() << " (skipped, no struct args/ret-value)\n";
+            errs() << " (skipped, no struct args/ret-value)\n";
             return;
         }
 
@@ -430,7 +430,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             map.insert({func->getArg(i), newFunc->getArg(i)});
         }
         SmallVector<ReturnInst *> returns;
-        outs() << " cloning " << func->getName() << " to " << newFunc->getName() << "\n";
+        errs() << " cloning " << func->getName() << " to " << newFunc->getName() << "\n";
         rebuildCalls(func->getParent(), func, newFunc);
         CloneFunctionInto(newFunc, func, map, CloneFunctionChangeType::LocalChangesOnly, returns);
         func->replaceAllUsesWith(newFunc);
@@ -444,7 +444,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             errs() << "Error opening file " << EC.message() << "\n";
         }
         M->print(out, nullptr);
-        outs() << "done!\n";
+        errs() << "done!\n";
     }
 
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
@@ -500,7 +500,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
             IRBuilder<> builder(context);
             for (const auto &[inst, tup] : alloca_replacements) {
-                outs() << "  + " << *inst << "; SHOULD CHANGE TO " << *std::get<0>(tup) << "\n";
+                errs() << "  + " << *inst << "; SHOULD CHANGE TO " << *std::get<0>(tup) << "\n";
                 builder.SetInsertPoint(inst);
                 // Note: the second element will be null for non-arrays.
                 auto *newInst = builder.CreateAlloca(std::get<0>(tup), std::get<1>(tup));

@@ -36,6 +36,7 @@ SUCCEEDING_TESTS = [
     "toy.heap.calloc.safe",
     "toy.ptr.safe",
     "toy.ptr.self_referential",
+    "toy.funccall.ret.safe",
 ]
 
 

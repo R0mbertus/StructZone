@@ -7,4 +7,4 @@
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
 using namespace llvm;
-Value* createSizeof(IRBuilder<>* builder, Type* accessedType);
+Value *createSizeof(IRBuilder<> *builder, Type *accessedType);
