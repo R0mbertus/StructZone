@@ -1,27 +1,23 @@
+#include <fstream>
 #include <map>
 #include <stack>
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/raw_ostream.h"
-
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include "functionTransformer.h"
 #include "redzone.h"
-#include <fstream>
 
 using namespace llvm;
 
 namespace {
 // typedefs for the long types we use in the pass.
-typedef std::vector<std::tuple<GetElementPtrInst *, Type *, std::vector<Value *>>> GepMap;
-typedef std::map<Instruction *, std::tuple<Type *, Value *>> AllocaMap;
-typedef std::vector<std::pair<BitCastInst *, Type *>> BitcastMap;
-typedef std::vector<std::pair<LoadInst *, Type *>> LoadMap;
+typedef std::vector<std::function<void(LLVMContext &)>> UpdateInstMap;
 
 struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
     // mapping from old struct to new struct
@@ -176,7 +172,77 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         }
     }
 
-    void handle_gep(GetElementPtrInst *gep_inst, GepMap &gep_replacements, LLVMContext &context) {
+    void update_inst_gep(GetElementPtrInst *inst, Type *type, std::vector<Value *> value,
+                         LLVMContext &context) {
+        IRBuilder<> builder(context);
+        builder.SetInsertPoint(inst);
+
+        auto *newInst =
+            builder.CreateGEP(type,
+                              // NOTE: we _cannot_ move this to the other loop, because this
+                              // gets altered by the alloca instruction replacements!
+                              inst->getPointerOperand(),
+                              // NOTE 2: some internal llvm magic is happening with arrayref;
+                              // doing it in the prior loop gives strange failures.
+                              ArrayRef<Value *>(value));
+        inst->replaceAllUsesWith(newInst);
+        inst->eraseFromParent();
+    }
+
+    void update_inst_alloca(Instruction *inst, Type *type, Value *value, LLVMContext &context) {
+        IRBuilder<> builder(context);
+        builder.SetInsertPoint(inst);
+        // Note: the second element will be null for non-arrays.
+        auto *newInst = builder.CreateAlloca(type, value);
+        inst->replaceAllUsesWith(newInst);
+        inst->eraseFromParent();
+    }
+
+    void update_inst_bitcast(BitCastInst *inst, Type *type, LLVMContext &context) {
+        IRBuilder<> builder(context);
+        builder.SetInsertPoint(inst);
+        auto *newInst = builder.CreateBitCast(inst->getOperand(0), type);
+        inst->replaceAllUsesWith(newInst);
+        inst->eraseFromParent();
+    }
+
+    void update_inst_load(LoadInst *inst, Type *type, LLVMContext &context) {
+        IRBuilder<> builder(context);
+        builder.SetInsertPoint(inst);
+        auto *newInst = builder.CreateLoad(type, inst->getPointerOperand());
+        inst->replaceAllUsesWith(newInst);
+        inst->eraseFromParent();
+    }
+
+    void update_inst_call(CallInst *inst, LLVMContext &context) {
+        IRBuilder<> builder(context);
+        builder.SetInsertPoint(inst);
+        std::vector<Value *> args;
+        for (int i = 0; i < inst->arg_size(); i++) {
+            args.push_back(inst->getArgOperand(i));
+        }
+        auto *calledVal = inst->getCalledOperand();
+        if (auto *func_ptr = dyn_cast<PointerType>(calledVal->getType())) {
+            auto *new_call = builder.CreateCall(
+                dyn_cast<FunctionType>(func_ptr->getPointerElementType()), calledVal, args);
+            inst->replaceAllUsesWith(new_call);
+            inst->eraseFromParent();
+        }
+    }
+
+    void update_inst_phi(PHINode *phi_inst, Type *type, LLVMContext &context) {
+        IRBuilder<> builder(context);
+        builder.SetInsertPoint(phi_inst);
+        auto *new_phi = builder.CreatePHI(type, phi_inst->getNumIncomingValues());
+        for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
+            new_phi->addIncoming(phi_inst->getIncomingValue(i), phi_inst->getIncomingBlock(i));
+        }
+        phi_inst->replaceAllUsesWith(new_phi);
+        phi_inst->eraseFromParent();
+    }
+
+    void handle_gep(GetElementPtrInst *gep_inst, UpdateInstMap &update_insts,
+                    LLVMContext &context) {
         auto src_type = gep_inst->getSourceElementType();
         int count = 0;
         std::vector<Value *> replaced_indices;
@@ -250,19 +316,24 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             } else {
                 res_type = struct_mapping[src_type]->inflatedType;
             }
-            gep_replacements.push_back(std::make_tuple(gep_inst, res_type, replaced_indices));
+            update_insts.push_back(
+                [this, gep_inst, res_type, replaced_indices](LLVMContext &context) {
+                    update_inst_gep(gep_inst, res_type, replaced_indices, context);
+                });
         } else {
             AssertNonStructType(src_type);
         }
     }
 
-    void handle_alloca(AllocaInst *alloca_inst, AllocaMap &alloca_replacements,
-                       LLVMContext &context, DataLayout &datalayout) {
+    void handle_alloca(AllocaInst *alloca_inst, UpdateInstMap &update_insts, LLVMContext &context,
+                       DataLayout &datalayout) {
         auto alloc_type = alloca_inst->getAllocatedType();
         // If this is the case, we know the struct type and can inflate it.
         if (struct_mapping.count(alloc_type) > 0) {
-            alloca_replacements[alloca_inst] =
-                std::make_tuple(struct_mapping[alloc_type]->inflatedType, nullptr);
+            StructType *struct_type = struct_mapping[alloc_type]->inflatedType;
+            update_insts.push_back([this, alloca_inst, struct_type](LLVMContext &context) {
+                update_inst_alloca(alloca_inst, struct_type, nullptr, context);
+            });
         } else if (auto *alloc_arr_type = dyn_cast<ArrayType>(alloc_type)) {
             // Here, we have an array of structs.
             if (struct_mapping.count(alloc_arr_type->getElementType()) > 0) {
@@ -270,8 +341,11 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 auto *new_arr_type =
                     ArrayType::get(struct_mapping[alloc_arr_type->getElementType()]->inflatedType,
                                    alloc_arr_type->getNumElements());
-                alloca_replacements[alloca_inst] =
-                    std::make_tuple(new_arr_type, alloca_inst->getArraySize());
+                auto *array_size = alloca_inst->getArraySize();
+                update_insts.push_back(
+                    [this, alloca_inst, new_arr_type, array_size](LLVMContext &context) {
+                        update_inst_alloca(alloca_inst, new_arr_type, array_size, context);
+                    });
             } else {
                 AssertNonStructType(alloc_arr_type->getElementType());
             }
@@ -284,13 +358,15 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             // Replace pointer to struct with pointer to inflated struct.
             auto *new_alloca_type = PointerType::getUnqual(
                 struct_mapping[ptr_type->getPointerElementType()]->inflatedType);
-            alloca_replacements[alloca_inst] = std::make_tuple(new_alloca_type, nullptr);
+            update_insts.push_back([this, alloca_inst, new_alloca_type](LLVMContext &context) {
+                update_inst_alloca(alloca_inst, new_alloca_type, nullptr, context);
+            });
         } else {
             AssertNonStructType(alloc_type);
         }
     }
 
-    void handle_bitcast(BitCastInst *bitcast_inst, BitcastMap &bitcast_replacements,
+    void handle_bitcast(BitCastInst *bitcast_inst, UpdateInstMap &update_insts,
                         LLVMContext &context,
                         std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo) {
         // Replace all uses of other insts will take care of src type already.
@@ -342,14 +418,15 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
 
             // Then, we can replace the type with the inflated type.
-            bitcast_replacements.push_back(std::pair<BitCastInst *, Type *>(
-                bitcast_inst,
-                PointerType::getUnqual(
-                    struct_mapping[dest_type->getPointerElementType()]->inflatedType)));
+            auto *type = PointerType::getUnqual(
+                struct_mapping[dest_type->getPointerElementType()]->inflatedType);
+            update_insts.push_back([this, bitcast_inst, type](LLVMContext &context) {
+                this->update_inst_bitcast(bitcast_inst, type, context);
+            });
         }
     }
 
-    void handle_load(LoadInst *load_inst, LoadMap &load_replacements, LLVMContext &context) {
+    void handle_load(LoadInst *load_inst, UpdateInstMap &update_insts, LLVMContext &context) {
         auto *load_type = load_inst->getType();
         if (auto *load_type_ptr = dyn_cast<PointerType>(load_type)) {
             if (struct_mapping.count(load_type_ptr->getPointerElementType()) == 0) {
@@ -358,10 +435,70 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
 
             // Replace with pointer to inflated type.
-            load_replacements.push_back(std::pair<LoadInst *, Type *>(
-                load_inst,
-                PointerType::getUnqual(
-                    struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType)));
+            auto *type = PointerType::getUnqual(
+                struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType);
+            update_insts.push_back([this, load_inst, type](LLVMContext &context) {
+                this->update_inst_load(load_inst, type, context);
+            });
+        }
+    }
+
+    void handle_phi(PHINode *phi_node, UpdateInstMap &update_insts, LLVMContext &context) {
+        auto *phi_type = phi_node->getType();
+
+        if (struct_mapping.count(phi_type) > 0) {
+            StructType *struct_type = struct_mapping[phi_type]->inflatedType;
+            update_insts.push_back([this, phi_node, struct_type](LLVMContext &context) {
+                update_inst_phi(phi_node, struct_type, context);
+            });
+        } else if (auto *ptr_type = dyn_cast<PointerType>(phi_type)) {
+            if (struct_mapping.count(ptr_type->getPointerElementType()) == 0) {
+                AssertNonStructType(ptr_type->getPointerElementType());
+                return;
+            }
+
+            // Replace pointer to struct with pointer to inflated struct.
+            auto *new_phi_type = PointerType::getUnqual(
+                struct_mapping[ptr_type->getPointerElementType()]->inflatedType);
+            update_insts.push_back([this, phi_node, new_phi_type](LLVMContext &context) {
+                update_inst_phi(phi_node, new_phi_type, context);
+            });
+        }
+    }
+
+    void handle_call(CallInst *call_inst, UpdateInstMap &update_insts, LLVMContext &context) {
+        auto *calledVal = call_inst->getCalledOperand();
+        if (!isa<Function>(calledVal)) {
+            update_insts.push_back([this, call_inst](LLVMContext &context) {
+                this->update_inst_call(call_inst, context);
+            });
+        } else {
+            // This is a horifically specific bit of code that deals with function
+            // pointers, because of the way llvm chooses to bitcast them when they
+            // are created/passed in a call.
+            for (int i = 0; i < call_inst->arg_size(); i++) {
+                auto *current_arg = call_inst->getArgOperand(i);
+                if (auto *constExpr = dyn_cast<ConstantExpr>(current_arg)) {
+                    if (constExpr->getOpcode() == Instruction::BitCast) {
+                        if (auto *func_type = dyn_cast<FunctionType>(
+                                constExpr->getType()->getPointerElementType())) {
+                            SmallVector<Type *> newParams;
+                            for (auto *p = func_type->param_begin(); p < func_type->param_end();
+                                 p++) {
+                                auto *newParam = getInflatedType(*p, NULL);
+                                newParams.push_back(newParam);
+                            }
+                            FunctionType *inflatedFuncType =
+                                FunctionType::get(getInflatedType(func_type->getReturnType(), NULL),
+                                                  newParams, func_type->isVarArg());
+                            auto *funcPtrType = PointerType::get(inflatedFuncType, 0);
+                            auto *newBitCast =
+                                ConstantExpr::getBitCast(constExpr->getOperand(0), funcPtrType);
+                            call_inst->setArgOperand(i, newBitCast);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -480,121 +617,32 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             // the loop. Additionally, note that it is not really feasible to directly store the
             // replacing instructions, as they have to already be inserted to exist. Thus, we store
             // the components we need to construct them.
-            AllocaMap alloca_replacements;
-            GepMap gep_replacements;
-            BitcastMap bitcast_replacements;
-            LoadMap load_replacements;
             // This is a special case; if we update function _pointers_, they don't automatically
             // update, so we have to re-create them.
-            std::vector<CallInst *> call_fixes;
+            UpdateInstMap update_insts;
+
             for (auto &bb : func) {
                 for (auto &inst : bb) {
                     if (auto *gep_inst = dyn_cast<GetElementPtrInst>(&inst)) {
-                        handle_gep(gep_inst, gep_replacements, context);
+                        handle_gep(gep_inst, update_insts, context);
                     } else if (auto *alloca_inst = dyn_cast<AllocaInst>(&inst)) {
-                        handle_alloca(alloca_inst, alloca_replacements, context, datalayout);
-                    } else if (auto *bitcast_instr = dyn_cast<BitCastInst>(&inst)) {
-                        handle_bitcast(bitcast_instr, bitcast_replacements, context,
-                                       &heapStructInfo);
-                    } else if (auto *load_instr = dyn_cast<LoadInst>(&inst)) {
-                        handle_load(load_instr, load_replacements, context);
-                    } else if (auto *call_instr = dyn_cast<CallInst>(&inst)) {
-                        auto *calledVal = call_instr->getCalledOperand();
-                        if (!isa<Function>(calledVal)) {
-                            call_fixes.push_back(call_instr);
-                        } else {
-                            // This is a horifically specific bit of code that deals with function
-                            // pointers, because of the way llvm chooses to bitcast them when they
-                            // are created/passed in a call.
-                            for (int i = 0; i < call_instr->arg_size(); i++) {
-                                auto *current_arg = call_instr->getArgOperand(i);
-                                if (auto *constExpr = dyn_cast<ConstantExpr>(current_arg)) {
-                                    if (constExpr->getOpcode() == Instruction::BitCast) {
-                                        if (auto *func_type = dyn_cast<FunctionType>(
-                                                constExpr->getType()->getPointerElementType())) {
-                                            SmallVector<Type *> newParams;
-                                            for (auto *p = func_type->param_begin();
-                                                 p < func_type->param_end(); p++) {
-                                                auto *newParam = getInflatedType(*p, NULL);
-                                                newParams.push_back(newParam);
-                                            }
-                                            FunctionType *inflatedFuncType = FunctionType::get(
-                                                getInflatedType(func_type->getReturnType(), NULL),
-                                                newParams, func_type->isVarArg());
-                                            auto *funcPtrType =
-                                                PointerType::get(inflatedFuncType, 0);
-                                            auto *newBitCast = ConstantExpr::getBitCast(
-                                                constExpr->getOperand(0), funcPtrType);
-                                            call_instr->setArgOperand(i, newBitCast);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        handle_alloca(alloca_inst, update_insts, context, datalayout);
+                    } else if (auto *bitcast_inst = dyn_cast<BitCastInst>(&inst)) {
+                        handle_bitcast(bitcast_inst, update_insts, context, &heapStructInfo);
+                    } else if (auto *load_inst = dyn_cast<LoadInst>(&inst)) {
+                        handle_load(load_inst, update_insts, context);
+                    } else if (auto *phi_inst = dyn_cast<PHINode>(&inst)) {
+                        handle_phi(phi_inst, update_insts, context);
+                    } else if (auto *call_inst = dyn_cast<CallInst>(&inst)) {
+                        handle_call(call_inst, update_insts, context);
                     }
                 }
             }
-            IRBuilder<> builder(context);
-            for (const auto &[inst, tup] : alloca_replacements) {
-                errs() << "  + " << *inst << "; SHOULD CHANGE TO " << *std::get<0>(tup) << "\n";
-                builder.SetInsertPoint(inst);
-                // Note: the second element will be null for non-arrays.
-                auto *newInst = builder.CreateAlloca(std::get<0>(tup), std::get<1>(tup));
-                inst->replaceAllUsesWith(newInst);
-                inst->eraseFromParent();
+
+            for (auto &update_inst : update_insts) {
+                update_inst(context);
             }
 
-            for (const auto &[inst, type] : bitcast_replacements) {
-                builder.SetInsertPoint(inst);
-                auto *newInst = builder.CreateBitCast(inst->getOperand(0), type);
-                inst->replaceAllUsesWith(newInst);
-                inst->eraseFromParent();
-            }
-
-            for (const auto &[inst, type] : load_replacements) {
-                builder.SetInsertPoint(inst);
-                auto *newInst = builder.CreateLoad(type, inst->getPointerOperand());
-                inst->replaceAllUsesWith(newInst);
-                inst->eraseFromParent();
-            }
-
-            for (auto *call_inst : call_fixes) {
-                builder.SetInsertPoint(call_inst);
-                std::vector<Value *> args;
-                for (int i = 0; i < call_inst->arg_size(); i++) {
-                    args.push_back(call_inst->getArgOperand(i));
-                }
-                auto *calledVal = call_inst->getCalledOperand();
-                if (auto *func_ptr = dyn_cast<PointerType>(calledVal->getType())) {
-                    auto *new_call = builder.CreateCall(
-                        dyn_cast<FunctionType>(func_ptr->getPointerElementType()), calledVal, args);
-                    call_inst->replaceAllUsesWith(new_call);
-                    call_inst->eraseFromParent();
-                }
-            }
-            for (const auto &[inst, type, value] : gep_replacements) {
-                builder.SetInsertPoint(inst);
-                errs() << "TEST: ";
-                inst->dump();
-                errs() << "\nTYPE: ";
-                type->dump();
-                errs() << "\n";
-                for (int i = 0; i < value.size(); i++) {
-                    errs() << "\t";
-                    value[i]->dump();
-                    errs() << "\n";
-                }
-                auto *newInst = builder.CreateGEP(
-                    type,
-                    // NOTE: we _cannot_ move this to the other loop, because this gets altered by
-                    // the alloca instruction replacements!
-                    inst->getPointerOperand(),
-                    // NOTE 2: some internal llvm magic is happening with arrayref; doing it in the
-                    // prior loop gives strange failures.
-                    ArrayRef<Value *>(value));
-                inst->replaceAllUsesWith(newInst);
-                inst->eraseFromParent();
-            }
             save_mod(&M);
         }
         // Some more TODO's:
