@@ -25,6 +25,15 @@ Type *getInflatedType(Type *arg_type, StructMap *struct_mapping, bool *changed =
             *changed = true;
         }
         arg_type_cp = struct_mapping->at(arg_type_cp).get()->inflatedType;
+    } else if (auto *func_type = dyn_cast<FunctionType>(arg_type_cp)) {
+        // Re-create the function pointer type to include inflated struct types.
+        auto *new_ret = getInflatedType(func_type->getReturnType(), struct_mapping, changed);
+        std::vector<Type *> new_args;
+        for (int i = 0; i < func_type->getNumParams(); i++) {
+            new_args.push_back(
+                getInflatedType(func_type->getParamType(i), struct_mapping, changed));
+        }
+        arg_type_cp = FunctionType::get(new_ret, new_args, func_type->isVarArg());
     }
     for (int i = 0; i < pointer_layers; i++) {
         arg_type_cp = arg_type_cp->getPointerTo();
@@ -257,6 +266,11 @@ void populate_delicate_functions(StructMap *structMap, LLVMContext *C) {
     for (std::pair<Function *, Function *> pair : exportedFuncsToWrap) {
         Function *inflatedFunc = pair.first;
         Function *originalFunc = pair.second;
-        createFlationWrapper(structMap, C, originalFunc, inflatedFunc, false);
+        // Note: a bit hacky, but this ensures there is in fact an entry point called 'main'.
+        // alternative (probably more clean) solution is to not inflate main. But what we cannot do
+        // is create deflator wrappers around all functions; this messes with function pointers.
+        if (originalFunc->getName() == "main") {
+            createFlationWrapper(structMap, C, originalFunc, inflatedFunc, false);
+        }
     }
 }

@@ -37,6 +37,7 @@ SUCCEEDING_TESTS = [
     "toy.ptr.safe",
     "toy.ptr.self_referential",
     "toy.funccall.ret.safe",
+    "toy.func_ptr.safe",
 ]
 
 
@@ -58,13 +59,17 @@ def run_test():
 
         if exited_normally ^ expected_succ:
             print(f"{COLORS['KRED'] }[FAILED]{COLORS['KNRM']} {i}")
-            print("\tEither the program crashed when it should not have, or vice versa.")
+            print(
+                "\tEither the program crashed when it should not have, or vice versa."
+            )
             continue
 
         if expected_succ:
             # Compile the source file with gcc, so that we can check against its unaltered output.
             sp.check_call(["gcc", f"./src/{i}.c", "-o", f"./bin/{i}.orig"])
-            orig_res = sp.run(["stdbuf", "-oL", f"./bin/{i}.orig"], capture_output=True, text=True)
+            orig_res = sp.run(
+                ["stdbuf", "-oL", f"./bin/{i}.orig"], capture_output=True, text=True
+            )
             if orig_res.stdout != res.stdout:
                 print(f"{COLORS['KRED']}[FAILED]{COLORS['KNRM']} {i}")
                 print("\tExit code is correct, but program behaviour has been altered!")

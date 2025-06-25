@@ -107,7 +107,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         if (inflated_type == NULL) {
             inflated_type = StructType::create(ctx, s->getName().str() + ".inflated");
             if (mappedFields.size() > 0) {
-            	inflated_type->setBody(ArrayRef<Type *>(mappedFields));
+                inflated_type->setBody(ArrayRef<Type *>(mappedFields));
             }
         }
 
@@ -389,8 +389,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         for (Function &F : *M) {
             for (BasicBlock &bb : F) {
                 for (Instruction &inst : bb) {
-                    CallInst *callInst = dyn_cast<CallInst>(&inst);
-                    if (callInst) {
+                    if (auto *callInst = dyn_cast<CallInst>(&inst)) {
                         if (callInst->getCalledFunction() == oldFunc) {
                             callInst->setCalledFunction(newFunc);
                         }
@@ -485,7 +484,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             GepMap gep_replacements;
             BitcastMap bitcast_replacements;
             LoadMap load_replacements;
-
+            // This is a special case; if we update function _pointers_, they don't automatically
+            // update, so we have to re-create them.
+            std::vector<CallInst *> call_fixes;
             for (auto &bb : func) {
                 for (auto &inst : bb) {
                     if (auto *gep_inst = dyn_cast<GetElementPtrInst>(&inst)) {
@@ -497,6 +498,39 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                                        &heapStructInfo);
                     } else if (auto *load_instr = dyn_cast<LoadInst>(&inst)) {
                         handle_load(load_instr, load_replacements, context);
+                    } else if (auto *call_instr = dyn_cast<CallInst>(&inst)) {
+                        auto *calledVal = call_instr->getCalledOperand();
+                        if (!isa<Function>(calledVal)) {
+                            call_fixes.push_back(call_instr);
+                        } else {
+                            // This is a horifically specific bit of code that deals with function
+                            // pointers, because of the way llvm chooses to bitcast them when they
+                            // are created/passed in a call.
+                            for (int i = 0; i < call_instr->arg_size(); i++) {
+                                auto *current_arg = call_instr->getArgOperand(i);
+                                if (auto *constExpr = dyn_cast<ConstantExpr>(current_arg)) {
+                                    if (constExpr->getOpcode() == Instruction::BitCast) {
+                                        if (auto *func_type = dyn_cast<FunctionType>(
+                                                constExpr->getType()->getPointerElementType())) {
+                                            SmallVector<Type *> newParams;
+                                            for (auto *p = func_type->param_begin();
+                                                 p < func_type->param_end(); p++) {
+                                                auto *newParam = getInflatedType(*p, NULL);
+                                                newParams.push_back(newParam);
+                                            }
+                                            FunctionType *inflatedFuncType = FunctionType::get(
+                                                getInflatedType(func_type->getReturnType(), NULL),
+                                                newParams, func_type->isVarArg());
+                                            auto *funcPtrType =
+                                                PointerType::get(inflatedFuncType, 0);
+                                            auto *newBitCast = ConstantExpr::getBitCast(
+                                                constExpr->getOperand(0), funcPtrType);
+                                            call_instr->setArgOperand(i, newBitCast);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -523,20 +557,33 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 inst->replaceAllUsesWith(newInst);
                 inst->eraseFromParent();
             }
-            save_mod(&M);
+
+            for (auto *call_inst : call_fixes) {
+                builder.SetInsertPoint(call_inst);
+                std::vector<Value *> args;
+                for (int i = 0; i < call_inst->arg_size(); i++) {
+                    args.push_back(call_inst->getArgOperand(i));
+                }
+                auto *calledVal = call_inst->getCalledOperand();
+                if (auto *func_ptr = dyn_cast<PointerType>(calledVal->getType())) {
+                    auto *new_call = builder.CreateCall(
+                        dyn_cast<FunctionType>(func_ptr->getPointerElementType()), calledVal, args);
+                    call_inst->replaceAllUsesWith(new_call);
+                    call_inst->eraseFromParent();
+                }
+            }
             for (const auto &[inst, type, value] : gep_replacements) {
                 builder.SetInsertPoint(inst);
-                // TODO: debug this, its failing at some point
-                errs() << "TEST inst: ";
-                inst->print(errs());
-                errs() << "\nTEST type: ";
-                type->print(errs());
-                errs() << "\nTEST val: ";
-                for (auto * val: value) {
-                	val->print(errs());
-                	errs() << " - ";
-                }
+                errs() << "TEST: ";
+                inst->dump();
+                errs() << "\nTYPE: ";
+                type->dump();
                 errs() << "\n";
+                for (int i = 0; i < value.size(); i++) {
+                    errs() << "\t";
+                    value[i]->dump();
+                    errs() << "\n";
+                }
                 auto *newInst = builder.CreateGEP(
                     type,
                     // NOTE: we _cannot_ move this to the other loop, because this gets altered by
@@ -548,6 +595,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 inst->replaceAllUsesWith(newInst);
                 inst->eraseFromParent();
             }
+            save_mod(&M);
         }
         // Some more TODO's:
         // see if we can move to storing marker values in redzones, and only walking the tree if
