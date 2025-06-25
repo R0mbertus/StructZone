@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 struct Simple {
     int zero;
@@ -24,12 +25,26 @@ int main() {
     // memcpy.
     struct Simple *example;
 
-    struct Simple if_example = {.zero = 0, .one = {1, 2}, .two = {3, 4, 5}, .three = 6};
-    struct Simple else_example = {.zero = 1, .one = {2, 3}, .two = {4, 5, 6}, .three = 7};
+    struct Simple if_example;
+    struct Simple else_example;
 
     if (rand() % 2) {
+        if_example.zero = 0;
+        if_example.one[0] = 1;
+        if_example.one[1] = 2;
+        if_example.two[0] = 3;
+        if_example.two[1] = 4;
+        if_example.two[2] = 5;
+        if_example.three = 6;
         example = &if_example;
     } else {
+        else_example.zero = 7;
+        else_example.one[0] = 8;
+        else_example.one[1] = 9;
+        else_example.two[0] = 10;
+        else_example.two[1] = 11;
+        else_example.two[2] = 12;
+        else_example.three = 13;
         example = &else_example;
     }
 

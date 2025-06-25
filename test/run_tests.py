@@ -38,6 +38,7 @@ SUCCEEDING_TESTS = [
     "toy.ptr.self_referential",
     "toy.funccall.ret.safe",
     "toy.func_ptr.safe",
+    "toy.phi.safe",
 ]
 
 
