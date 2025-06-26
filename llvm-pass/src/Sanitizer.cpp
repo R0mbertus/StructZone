@@ -330,6 +330,10 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
     void handle_alloca(AllocaInst *alloca_inst, UpdateInstMap &update_insts, LLVMContext &context,
                        DataLayout &datalayout) {
         auto alloc_type = alloca_inst->getAllocatedType();
+        errs() << "ALLOCA: \n";
+        alloca_inst->dump();
+        errs() << "TYPE: \n";
+        alloc_type->dump();
         // If this is the case, we know the struct type and can inflate it.
         if (struct_mapping.count(alloc_type) > 0) {
             StructType *struct_type = struct_mapping[alloc_type]->inflatedType;
@@ -353,11 +357,17 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
         } else if (auto *ptr_type = dyn_cast<PointerType>(alloc_type)) {
             bool hasChanged = false;
+            errs() << "FIRST TEST: \n";
+            ptr_type->dump();
             auto *inflatedType = getInflatedType(ptr_type, &hasChanged);
             if (!hasChanged) {
                 return;
             }
-
+			errs() << "TEST: ";
+			inflatedType->print(errs());
+			outs() << "\nFor: ";
+			alloca_inst->print(errs());
+			errs() << "\n";
             // Replace pointer to struct with pointer to inflated struct.
             update_insts.push_back([this, alloca_inst, inflatedType](LLVMContext &context) {
                 update_inst_alloca(alloca_inst, inflatedType, nullptr, context);
@@ -388,6 +398,11 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     if (auto *const_int = dyn_cast<ConstantInt>(call_inst->getArgOperand(i))) {
                         // Take the old malloc size, divide it by the original struct size, and
                         // multiply it by the inflated struct size to handle arrays of structs.
+                        errs() << "ALLOCATION TEST: \n";
+                        if (!dest_type->getPointerElementType()->isStructTy()) {
+                        	return; // pointers and the like
+                        }
+                        dest_type->dump();
                         auto struct_info = struct_mapping[dest_type->getPointerElementType()];
                         auto count = const_int->getValue().udiv(struct_info->size);
                         auto *new_size = ConstantInt::get(call_inst->getArgOperand(i)->getType(),
@@ -405,6 +420,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         errs() << " - ";
                         call_inst->getArgOperand(i)->print(errs());
                         errs() << "\n";
+                        return;
                         abort();
                     }
                 };
@@ -567,7 +583,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             errs() << "Error opening file " << EC.message() << "\n";
         }
         M->print(out, nullptr);
-        errs() << "done!\n";
     }
 
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
@@ -592,10 +607,12 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             transformFuncSig(func, &struct_mapping);
         }
         for (auto &func : M) {
+        	outs() << "Started resolving function: " << func.getName() << "\n";
         	to_resolve.clear();
             // Then it is an external function, and must be linked. We can't instrument this -
             // though it is probably interesting in a later stage for inflating/deflating structs.
             if (func.isDeclaration()) {
+            	outs() << "Finished function: " << func.getName() << "\n";
                 continue;
             }
             // Here, we store instructions and the replacements they will get. This construction is
@@ -621,6 +638,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         handle_call(call_inst, update_insts, context);
                     }
                 }
+                save_mod(&M);
             }
 
             for (auto &update_inst : update_insts) {
@@ -630,16 +648,13 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             // to be safe, we can then delay updating phi nodes until the very end (because all
             // dependencies will be updated at that point).
             save_mod(&M);
-            errs() << "RESOLVING PHI NODES:\n";
             IRBuilder<> builder(context);
             for (auto &[phi_inst, tup] : to_resolve) {
                 auto *phi_type = std::get<1>(tup);
                 auto *bitcast = std::get<0>(tup);
-                errs() << "TEST " << phi_inst << " ";
-                bitcast->dump();
-                errs() << " <> ";
+                errs() << "PHI: ";
                 phi_inst->dump();
-                errs() << "AND: ";
+                errs() << "NEW TYPE: ";
                 phi_type->dump();
                 builder.SetInsertPoint(phi_inst);
                 auto *new_phi = builder.CreatePHI(phi_type, phi_inst->getNumIncomingValues());
@@ -653,6 +668,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 bitcast->eraseFromParent();
                 save_mod(&M);
             }
+            outs() << "Finished function: " << func.getName() << "\n";
+            save_mod(&M);
         }
         // Some more TODO's:
         // see if we can move to storing marker values in redzones, and only walking the tree if
