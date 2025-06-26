@@ -8,10 +8,10 @@ struct Simple {
     char three;
 };
 
-struct Simple* func() {
+struct Simple *func() {
     // Note: we very explicitly do not use struct initializer, as they get lowered to memset /
     // memcpy.
-    struct Simple* example = malloc(sizeof(struct Simple));
+    struct Simple *example = malloc(sizeof(struct Simple));
     example->zero = 7;
     example->one[0] = 1;
     example->one[1] = 2;
@@ -22,8 +22,8 @@ struct Simple* func() {
     return example;
 }
 
-void indirect(struct Simple* (*instantiate_func)()) {
-    struct Simple* example = instantiate_func();
+void indirect(struct Simple *(*instantiate_func)()) {
+    struct Simple *example = instantiate_func();
     // Print to see what the contents are;
     printf("zero %i\n", example->zero);
     for (int i = 0; i < 2; i++) {

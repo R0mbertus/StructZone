@@ -176,15 +176,11 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                          LLVMContext &context) {
         IRBuilder<> builder(context);
         builder.SetInsertPoint(inst);
-
         auto *newInst =
             builder.CreateGEP(type,
                               // NOTE: we _cannot_ move this to the other loop, because this
                               // gets altered by the alloca instruction replacements!
-                              inst->getPointerOperand(),
-                              // NOTE 2: some internal llvm magic is happening with arrayref;
-                              // doing it in the prior loop gives strange failures.
-                              ArrayRef<Value *>(value));
+                              inst->getPointerOperand(), value);
         inst->replaceAllUsesWith(newInst);
         inst->eraseFromParent();
     }
@@ -232,6 +228,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
     void update_inst_phi(PHINode *phi_inst, Type *type, LLVMContext &context) {
         IRBuilder<> builder(context);
+        errs() << "TEST: ";
+        phi_inst->dump();
+        errs() << "\n";
         builder.SetInsertPoint(phi_inst);
         auto *new_phi = builder.CreatePHI(type, phi_inst->getNumIncomingValues());
         for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
@@ -306,22 +305,18 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
         // In this case, we know the GEP refers to a struct type that will be inflated, so we should
         // update its offset (and type).
-        if (struct_mapping.count(src_type) > 0) {
-            Type *res_type = nullptr;
+        bool hasChanged = false;
+        auto *inflatedType = getInflatedType(src_type, &hasChanged);
+        if (hasChanged) {
             // we are now done reasoning about the element type, so turn it back into an array type
             // if that is what we started with.
             if (arr_type) {
-                res_type = ArrayType::get(struct_mapping[src_type]->inflatedType,
-                                          arr_type->getArrayNumElements());
-            } else {
-                res_type = struct_mapping[src_type]->inflatedType;
+                inflatedType = ArrayType::get(inflatedType, arr_type->getArrayNumElements());
             }
             update_insts.push_back(
-                [this, gep_inst, res_type, replaced_indices](LLVMContext &context) {
-                    update_inst_gep(gep_inst, res_type, replaced_indices, context);
+                [this, gep_inst, inflatedType, replaced_indices](LLVMContext &context) {
+                    update_inst_gep(gep_inst, inflatedType, replaced_indices, context);
                 });
-        } else {
-            AssertNonStructType(src_type);
         }
     }
 
@@ -427,43 +422,27 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
     }
 
     void handle_load(LoadInst *load_inst, UpdateInstMap &update_insts, LLVMContext &context) {
-        auto *load_type = load_inst->getType();
-        if (auto *load_type_ptr = dyn_cast<PointerType>(load_type)) {
-            if (struct_mapping.count(load_type_ptr->getPointerElementType()) == 0) {
-                AssertNonStructType(load_type_ptr->getPointerElementType());
-                return;
-            }
-
-            // Replace with pointer to inflated type.
-            auto *type = PointerType::getUnqual(
-                struct_mapping[load_type_ptr->getPointerElementType()]->inflatedType);
-            update_insts.push_back([this, load_inst, type](LLVMContext &context) {
-                this->update_inst_load(load_inst, type, context);
-            });
+        bool hasChanged = false;
+        auto *inflatedType = getInflatedType(load_inst->getType(), &hasChanged);
+        // No struct type present; no need to update.
+        if (!hasChanged) {
+            return;
         }
+        update_insts.push_back([this, load_inst, inflatedType](LLVMContext &context) {
+            this->update_inst_load(load_inst, inflatedType, context);
+        });
     }
 
     void handle_phi(PHINode *phi_node, UpdateInstMap &update_insts, LLVMContext &context) {
-        auto *phi_type = phi_node->getType();
-
-        if (struct_mapping.count(phi_type) > 0) {
-            StructType *struct_type = struct_mapping[phi_type]->inflatedType;
-            update_insts.push_back([this, phi_node, struct_type](LLVMContext &context) {
-                update_inst_phi(phi_node, struct_type, context);
-            });
-        } else if (auto *ptr_type = dyn_cast<PointerType>(phi_type)) {
-            if (struct_mapping.count(ptr_type->getPointerElementType()) == 0) {
-                AssertNonStructType(ptr_type->getPointerElementType());
-                return;
-            }
-
-            // Replace pointer to struct with pointer to inflated struct.
-            auto *new_phi_type = PointerType::getUnqual(
-                struct_mapping[ptr_type->getPointerElementType()]->inflatedType);
-            update_insts.push_back([this, phi_node, new_phi_type](LLVMContext &context) {
-                update_inst_phi(phi_node, new_phi_type, context);
-            });
+        bool hasChanged = false;
+        auto *inflatedType = getInflatedType(phi_node->getType(), &hasChanged);
+        // No struct type present; no need to update.
+        if (!hasChanged) {
+            return;
         }
+        update_insts.push_back([this, phi_node, inflatedType](LLVMContext &context) {
+            this->update_inst_phi(phi_node, inflatedType, context);
+        });
     }
 
     void handle_call(CallInst *call_inst, UpdateInstMap &update_insts, LLVMContext &context) {
