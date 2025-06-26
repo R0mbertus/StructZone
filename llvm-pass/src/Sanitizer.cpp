@@ -592,6 +592,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             transformFuncSig(func, &struct_mapping);
         }
         for (auto &func : M) {
+        	to_resolve.clear();
             // Then it is an external function, and must be linked. We can't instrument this -
             // though it is probably interesting in a later stage for inflating/deflating structs.
             if (func.isDeclaration()) {
