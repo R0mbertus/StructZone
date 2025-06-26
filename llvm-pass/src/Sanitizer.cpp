@@ -225,19 +225,26 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             inst->eraseFromParent();
         }
     }
-
+    std::map<PHINode *, std::tuple<Instruction *, Type *>> to_resolve;
     void update_inst_phi(PHINode *phi_inst, Type *type, LLVMContext &context) {
         IRBuilder<> builder(context);
-        errs() << "TEST: ";
-        phi_inst->dump();
-        errs() << "\n";
-        builder.SetInsertPoint(phi_inst);
-        auto *new_phi = builder.CreatePHI(type, phi_inst->getNumIncomingValues());
-        for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
-            new_phi->addIncoming(phi_inst->getIncomingValue(i), phi_inst->getIncomingBlock(i));
+        // before the first non phi instruction. this is because if we have multiple phi nodes, they
+        // _all_ have to appear before any other instructions.
+        builder.SetInsertPoint(phi_inst->getParent()->getFirstNonPHI());
+        // we create a bitcast right after the phi instruction. this allows us to break any possible
+        // cyclic dependencies.
+        auto *bitcast = builder.CreateBitCast(phi_inst, type);
+        // effectively identical to replaceAllUsesWith, except that we don't consider the bitcast.
+        std::vector<Use *> phi_uses;
+        for (auto &use : phi_inst->uses()) {
+            if (use.getUser() != bitcast) {
+                phi_uses.push_back(&use);
+            }
         }
-        phi_inst->replaceAllUsesWith(new_phi);
-        phi_inst->eraseFromParent();
+        for (auto *use : phi_uses) {
+            use->set(bitcast);
+        }
+        to_resolve[phi_inst] = std::make_tuple(dyn_cast<Instruction>(bitcast), type);
     }
 
     void handle_gep(GetElementPtrInst *gep_inst, UpdateInstMap &update_insts,
@@ -345,16 +352,15 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                 AssertNonStructType(alloc_arr_type->getElementType());
             }
         } else if (auto *ptr_type = dyn_cast<PointerType>(alloc_type)) {
-            if (struct_mapping.count(ptr_type->getPointerElementType()) == 0) {
-                AssertNonStructType(ptr_type->getPointerElementType());
+            bool hasChanged = false;
+            auto *inflatedType = getInflatedType(ptr_type, &hasChanged);
+            if (!hasChanged) {
                 return;
             }
 
             // Replace pointer to struct with pointer to inflated struct.
-            auto *new_alloca_type = PointerType::getUnqual(
-                struct_mapping[ptr_type->getPointerElementType()]->inflatedType);
-            update_insts.push_back([this, alloca_inst, new_alloca_type](LLVMContext &context) {
-                update_inst_alloca(alloca_inst, new_alloca_type, nullptr, context);
+            update_insts.push_back([this, alloca_inst, inflatedType](LLVMContext &context) {
+                update_inst_alloca(alloca_inst, inflatedType, nullptr, context);
             });
         } else {
             AssertNonStructType(alloc_type);
@@ -366,7 +372,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo) {
         // Replace all uses of other insts will take care of src type already.
         if (auto *dest_type = dyn_cast<PointerType>(bitcast_inst->getDestTy())) {
-            if (struct_mapping.count(dest_type->getPointerElementType()) == 0) {
+            bool hasChanged = false;
+            auto *inflated_dest_type = getInflatedType(dest_type, &hasChanged);
+            if (!hasChanged) {
                 AssertNonStructType(dest_type->getPointerElementType());
                 return;
             }
@@ -413,10 +421,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
 
             // Then, we can replace the type with the inflated type.
-            auto *type = PointerType::getUnqual(
-                struct_mapping[dest_type->getPointerElementType()]->inflatedType);
-            update_insts.push_back([this, bitcast_inst, type](LLVMContext &context) {
-                this->update_inst_bitcast(bitcast_inst, type, context);
+            update_insts.push_back([this, bitcast_inst, inflated_dest_type](LLVMContext &context) {
+                this->update_inst_bitcast(bitcast_inst, inflated_dest_type, context);
             });
         }
     }
@@ -594,10 +600,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             // Here, we store instructions and the replacements they will get. This construction is
             // necessary because doing so invalidates existing iterators, so we cannot do it inside
             // the loop. Additionally, note that it is not really feasible to directly store the
-            // replacing instructions, as they have to already be inserted to exist. Thus, we store
-            // the components we need to construct them.
-            // This is a special case; if we update function _pointers_, they don't automatically
-            // update, so we have to re-create them.
+            // replacing instructions, as they have to already be inserted to exist.
+            // Thus, we store a lambda which can be called to do the updating.
             UpdateInstMap update_insts;
 
             for (auto &bb : func) {
@@ -621,8 +625,33 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             for (auto &update_inst : update_insts) {
                 update_inst(context);
             }
-
+            // Phi nodes are a special case; we break their cyclic dependency with a bitcast.
+            // to be safe, we can then delay updating phi nodes until the very end (because all
+            // dependencies will be updated at that point).
             save_mod(&M);
+            errs() << "RESOLVING PHI NODES:\n";
+            IRBuilder<> builder(context);
+            for (auto &[phi_inst, tup] : to_resolve) {
+                auto *phi_type = std::get<1>(tup);
+                auto *bitcast = std::get<0>(tup);
+                errs() << "TEST " << phi_inst << " ";
+                bitcast->dump();
+                errs() << " <> ";
+                phi_inst->dump();
+                errs() << "AND: ";
+                phi_type->dump();
+                builder.SetInsertPoint(phi_inst);
+                auto *new_phi = builder.CreatePHI(phi_type, phi_inst->getNumIncomingValues());
+                for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
+                    new_phi->addIncoming(phi_inst->getIncomingValue(i),
+                                         phi_inst->getIncomingBlock(i));
+                }
+                phi_inst->replaceAllUsesWith(new_phi);
+                phi_inst->eraseFromParent();
+                bitcast->replaceAllUsesWith(new_phi);
+                bitcast->eraseFromParent();
+                save_mod(&M);
+            }
         }
         // Some more TODO's:
         // see if we can move to storing marker values in redzones, and only walking the tree if
