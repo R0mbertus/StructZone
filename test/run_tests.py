@@ -20,6 +20,7 @@ FAILING_TESTS = [
     "toy.internal_overflow",
     "toy.nested.internal_overflow",
     "toy.funccall.external_overflow",
+    "toy.global.internal_overflow",
 ]
 
 SUCCEEDING_TESTS = [

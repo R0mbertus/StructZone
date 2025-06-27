@@ -249,6 +249,15 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
 
     void handle_gep(GetElementPtrInst *gep_inst, UpdateInstMap &update_insts,
                     LLVMContext &context) {
+        gep_inst->getPointerOperand()->print(errs());
+        if (auto *inner_const = dyn_cast<ConstantExpr>(gep_inst->getPointerOperand())) {
+        	if (inner_const->getOpcode() == Instruction::GetElementPtr) {
+        		auto *inner_gep_inst = dyn_cast<GetElementPtrInst>(inner_const->getAsInstruction());
+        		inner_gep_inst->insertBefore(gep_inst);
+        		gep_inst->setOperand(0, inner_gep_inst);
+        		handle_gep(inner_gep_inst, update_insts, context);
+        	}
+        }
         auto src_type = gep_inst->getSourceElementType();
         int count = 0;
         std::vector<Value *> replaced_indices;
@@ -444,6 +453,25 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
     }
 
     void handle_load(LoadInst *load_inst, UpdateInstMap &update_insts, LLVMContext &context) {
+    	auto *constExpr = dyn_cast<ConstantExpr>(load_inst->getPointerOperand());
+    	GetElementPtrInst *outer_inst = nullptr;
+    	do {
+    		if (constExpr && constExpr->getOpcode() == Instruction::GetElementPtr) {
+    			auto *gep_inst = dyn_cast<GetElementPtrInst>(constExpr->getAsInstruction());
+    			if (!outer_inst) {
+    				gep_inst->insertBefore(load_inst);
+    				load_inst->setOperand(0, gep_inst);
+    			} else {
+    				gep_inst->insertBefore(outer_inst);
+    				outer_inst->setOperand(0, gep_inst);
+    			}
+    			handle_gep(gep_inst, update_insts, context);
+    			outer_inst = gep_inst;
+    			constExpr = dyn_cast<ConstantExpr>(outer_inst->getPointerOperand());
+    		} else {
+    			constExpr = nullptr;
+    		}
+    	} while (constExpr);
         bool hasChanged = false;
         auto *inflatedType = getInflatedType(load_inst->getType(), &hasChanged);
         // No struct type present; no need to update.
@@ -453,6 +481,28 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         update_insts.push_back([this, load_inst, inflatedType](LLVMContext &context) {
             this->update_inst_load(load_inst, inflatedType, context);
         });
+    }
+    
+    void handle_store(StoreInst *store_inst, UpdateInstMap &update_insts, LLVMContext &context) {
+    	auto *constExpr = dyn_cast<ConstantExpr>(store_inst->getPointerOperand());
+    	GetElementPtrInst *outer_inst = nullptr;
+    	do {
+    		if (constExpr && constExpr->getOpcode() == Instruction::GetElementPtr) {
+    			auto *gep_inst = dyn_cast<GetElementPtrInst>(constExpr->getAsInstruction());
+    			if (!outer_inst) {
+    				gep_inst->insertBefore(store_inst);
+    				store_inst->setOperand(1, gep_inst);
+    			} else {
+    				gep_inst->insertBefore(outer_inst);
+    				outer_inst->setOperand(0, gep_inst);
+    			}
+    			handle_gep(gep_inst, update_insts, context);
+    			outer_inst = gep_inst;
+    			constExpr = dyn_cast<ConstantExpr>(outer_inst->getPointerOperand());
+    		} else {
+    			constExpr = nullptr;
+    		}
+    	} while (constExpr);
     }
 
     void handle_phi(PHINode *phi_node, UpdateInstMap &update_insts, LLVMContext &context) {
@@ -598,7 +648,27 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             struct_mapping[si.get()->deflatedType] = si;
         }
         DeepWalk(datalayout, context);
-
+		
+		std::vector<std::tuple<GlobalVariable*, Type*>> globals;
+		for (auto &glob : M.getGlobalList()) {
+			bool hasChanged = false;
+			auto *inflatedType = getInflatedType(glob.getType(), &hasChanged);
+			if (hasChanged) {
+				globals.push_back(std::make_tuple(&glob, inflatedType->getPointerElementType()));
+			}
+		}
+		for (auto tup : globals) {
+			auto *glob = std::get<0>(tup);
+			auto *inflatedType = std::get<1>(tup);
+			auto *new_glob = new GlobalVariable(M,
+					inflatedType, 
+					glob->isConstant(),
+					glob->getLinkage(),
+					Constant::getNullValue(inflatedType),
+					glob->getName() + ".inflated");
+			glob->replaceAllUsesWith(new_glob);
+			glob->eraseFromParent();
+		}
         SmallVector<Function *> funcs;
         for (auto &func : M) {
             funcs.push_back(&func);
@@ -636,6 +706,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         handle_phi(phi_inst, update_insts, context);
                     } else if (auto *call_inst = dyn_cast<CallInst>(&inst)) {
                         handle_call(call_inst, update_insts, context);
+                    } else if (auto *store_inst = dyn_cast<StoreInst>(&inst)) {
+                    	handle_store(store_inst, update_insts, context);
                     }
                 }
                 save_mod(&M);

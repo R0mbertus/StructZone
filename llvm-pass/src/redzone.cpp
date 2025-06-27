@@ -344,6 +344,7 @@ void insert_heap_free(CallInst *callToFree, struct Runtime *runtime,
 void setupRedzones(std::map<StringRef, std::shared_ptr<StructInfo>> *redzoneInfo, Module &M,
                    std::map<CallInst *, std::tuple<StructInfo, size_t>> *heapStructInfo) {
     struct Runtime runtime = add_runtime_linkage(M);
+    // TODO: add checks for global structs as well.
     for (Function &func : M) {
         for (BasicBlock &bb : func) {
             for (Instruction &inst : bb) {
