@@ -22,6 +22,7 @@ check: all
 	python3 ./run_tests.py
 
 all: dirs $(addprefix $(BIN_DIR)/, $(TESTS))
+	clang src/benchmark.c -o bin/benchmark.orig
 
 list:
 	@echo $(addprefix $(BIN_DIR)/, $(TESTS))
@@ -33,7 +34,8 @@ dirs:
 
 .PRECIOUS: $(IN_DIR)/%.ll
 $(IN_DIR)/%.ll: $(SRC_DIR)/%.c
-	clang -I ${RUNTIME_INC_DIR} -g -S -emit-llvm -Xclang -disable-O0-optnone $< -o $@ -L$(RUNTIME_BIN_DIR) -l:Runtime.a 
+	clang -I ${RUNTIME_INC_DIR} -g -S -emit-llvm -Xclang -disable-O0-optnone $< -o $@ -L$(RUNTIME_BIN_DIR) -l:Runtime.a
+	
 
 .PRECIOUS: $(OUT_DIR)/%.out.ll
 $(OUT_DIR)/%.out.ll: $(IN_DIR)/%.ll

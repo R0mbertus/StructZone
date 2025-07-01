@@ -39,8 +39,10 @@ bool resolve_single(struct Container* curr) {
 
 struct Container* resolve(struct Container* curr) {
     while (curr) {
+        printf("Resolving: val is now %f and operand %i\n", curr->val, curr->operand);
         if (resolve_single(curr)) {
             curr = curr->next;
+            printf("After: val is now %f and operand %i\n", curr->val, curr->operand);
         } else {
             return curr;
         }
@@ -50,7 +52,11 @@ struct Container* resolve(struct Container* curr) {
 
 struct Container* build_single(struct Container* curr) {
     struct Container *new = malloc(sizeof(struct Container));
-    new->val = (double)(rand()) / (double)(rand());
+    double l = (double)(rand());
+    double r = (double)(rand());
+    double lr = l/r;
+    printf("DEBUG: %f %f %f\n", l, r, lr);
+    new->val = lr;
     switch (rand() % 4) {
         case 0:
             new->operand = ADD;
@@ -65,6 +71,7 @@ struct Container* build_single(struct Container* curr) {
             new->operand = DIV;
             break;
     }
+    printf("Created new container with %f, %i and %p\n", new->val, new->operand, new);
     if (curr) {
         curr->next = new;
     }
@@ -109,4 +116,4 @@ int main(int argc, char *argv[]) {
     // and finally free it.
     free_ll(initial);
     return 0;
-}
+}//TODO: debug prints
