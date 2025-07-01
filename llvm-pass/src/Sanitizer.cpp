@@ -246,6 +246,10 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         }
         to_resolve[phi_inst] = std::make_tuple(dyn_cast<Instruction>(bitcast), type);
     }
+    
+    void update_inst_icmp(ICmpInst *icmp_inst, Value *new_operand, int idx) {
+    	icmp_inst->setOperand(idx, new_operand);
+    }
 
     void handle_gep(GetElementPtrInst *gep_inst, UpdateInstMap &update_insts,
                     LLVMContext &context) {
@@ -339,10 +343,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
     void handle_alloca(AllocaInst *alloca_inst, UpdateInstMap &update_insts, LLVMContext &context,
                        DataLayout &datalayout) {
         auto alloc_type = alloca_inst->getAllocatedType();
-        errs() << "ALLOCA: \n";
-        alloca_inst->dump();
-        errs() << "TYPE: \n";
-        alloc_type->dump();
         // If this is the case, we know the struct type and can inflate it.
         if (struct_mapping.count(alloc_type) > 0) {
             StructType *struct_type = struct_mapping[alloc_type]->inflatedType;
@@ -366,17 +366,10 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             }
         } else if (auto *ptr_type = dyn_cast<PointerType>(alloc_type)) {
             bool hasChanged = false;
-            errs() << "FIRST TEST: \n";
-            ptr_type->dump();
             auto *inflatedType = getInflatedType(ptr_type, &hasChanged);
             if (!hasChanged) {
                 return;
             }
-			errs() << "TEST: ";
-			inflatedType->print(errs());
-			outs() << "\nFor: ";
-			alloca_inst->print(errs());
-			errs() << "\n";
             // Replace pointer to struct with pointer to inflated struct.
             update_insts.push_back([this, alloca_inst, inflatedType](LLVMContext &context) {
                 update_inst_alloca(alloca_inst, inflatedType, nullptr, context);
@@ -407,11 +400,9 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                     if (auto *const_int = dyn_cast<ConstantInt>(call_inst->getArgOperand(i))) {
                         // Take the old malloc size, divide it by the original struct size, and
                         // multiply it by the inflated struct size to handle arrays of structs.
-                        errs() << "ALLOCATION TEST: \n";
                         if (!dest_type->getPointerElementType()->isStructTy()) {
                         	return; // pointers and the like
                         }
-                        dest_type->dump();
                         auto struct_info = struct_mapping[dest_type->getPointerElementType()];
                         auto count = const_int->getValue().udiv(struct_info->size);
                         auto *new_size = ConstantInt::get(call_inst->getArgOperand(i)->getType(),
@@ -516,6 +507,26 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             this->update_inst_phi(phi_node, inflatedType, context);
         });
     }
+    
+    void handle_icmp(ICmpInst *icmp_inst, UpdateInstMap &update_insts, LLVMContext &context) {
+    	if (auto *test_one = dyn_cast<ConstantPointerNull>(icmp_inst->getOperand(0))) {
+    		bool has_changed_one;
+    		auto *inflated_one = getInflatedType(test_one->getType(), &has_changed_one);
+    		if (has_changed_one) {
+    			update_insts.push_back([this, icmp_inst, inflated_one](LLVMContext &context) {
+				    this->update_inst_icmp(icmp_inst, ConstantPointerNull::get(dyn_cast<PointerType>(inflated_one)), 0);
+				});
+    		}
+    	} else if (auto *test_two = dyn_cast<ConstantPointerNull>(icmp_inst->getOperand(1))) {
+    		bool has_changed_two;
+    		auto *inflated_two = getInflatedType(test_two->getType(), &has_changed_two);
+    		if (has_changed_two) {
+    			update_insts.push_back([this, icmp_inst, inflated_two](LLVMContext &context) {
+				    this->update_inst_icmp(icmp_inst, ConstantPointerNull::get(dyn_cast<PointerType>(inflated_two)), 1);
+				});
+    		}
+    	}
+    }
 
     void handle_call(CallInst *call_inst, UpdateInstMap &update_insts, LLVMContext &context) {
         auto *calledVal = call_inst->getCalledOperand();
@@ -548,6 +559,13 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                             call_inst->setArgOperand(i, newBitCast);
                         }
                     }
+                }
+                else if (auto *constNullPtr = dyn_cast<ConstantPointerNull>(current_arg)) {
+                	bool hasChanged = false;
+                	auto inflatedNullPtrType = getInflatedType(constNullPtr->getType(), &hasChanged);
+                	if (hasChanged) {
+                		call_inst->setArgOperand(i, ConstantPointerNull::get(dyn_cast<PointerType>(inflatedNullPtrType)));
+					}
                 }
             }
         }
@@ -598,7 +616,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         bool hasStructArgs = false;
         SmallVector<Type *> newArgs;
         ValueToValueMapTy map;
-        errs() << "checking function " << func->getName();
 
         for (Argument *a = func->arg_begin(); a < func->arg_end(); a++) {
             Type *newArg = getInflatedType(a->getType(), &hasStructArgs);
@@ -608,7 +625,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             getInflatedType(func->getReturnType(), &hasStructArgs), newArgs, func->isVarArg());
 
         if (!hasStructArgs) {
-            errs() << " (skipped, no struct args/ret-value)\n";
             return;
         }
 
@@ -619,7 +635,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             map.insert({func->getArg(i), newFunc->getArg(i)});
         }
         SmallVector<ReturnInst *> returns;
-        errs() << " cloning " << func->getName() << " to " << newFunc->getName() << "\n";
         rebuildCalls(func->getParent(), func, newFunc);
         CloneFunctionInto(newFunc, func, map, CloneFunctionChangeType::LocalChangesOnly, returns);
         func->replaceAllUsesWith(newFunc);
@@ -708,6 +723,8 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
                         handle_call(call_inst, update_insts, context);
                     } else if (auto *store_inst = dyn_cast<StoreInst>(&inst)) {
                     	handle_store(store_inst, update_insts, context);
+                    } else if (auto* icmp_inst = dyn_cast<ICmpInst>(&inst)) {
+                    	handle_icmp(icmp_inst, update_insts, context);
                     }
                 }
                 save_mod(&M);
@@ -724,10 +741,6 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
             for (auto &[phi_inst, tup] : to_resolve) {
                 auto *phi_type = std::get<1>(tup);
                 auto *bitcast = std::get<0>(tup);
-                errs() << "PHI: ";
-                phi_inst->dump();
-                errs() << "NEW TYPE: ";
-                phi_type->dump();
                 builder.SetInsertPoint(phi_inst);
                 auto *new_phi = builder.CreatePHI(phi_type, phi_inst->getNumIncomingValues());
                 for (unsigned i = 0; i < phi_inst->getNumIncomingValues(); ++i) {
@@ -750,7 +763,7 @@ struct StructZoneSanitizer : PassInfoMixin<StructZoneSanitizer> {
         setupRedzoneChecks(&struct_mapping, M, &heapStructInfo);
         populate_delicate_functions(&struct_mapping, &M.getContext());
         save_mod(&M);
-
+		outs() << "Finished pass!\n";
         return PreservedAnalyses::none();
     }
 };
