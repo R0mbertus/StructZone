@@ -9,7 +9,7 @@
 #ifndef REDZONE_HEADER
 #define REDZONE_HEADER
 using namespace llvm;
-const size_t REDZONE_SIZE = 1;
+const size_t REDZONE_SIZE = 32;
 
 struct StructInfo;
 
