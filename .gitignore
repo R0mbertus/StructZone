@@ -22,3 +22,5 @@ runtime/llvm/*
 
 *.iso
 **/*.iso
+benchmark/bin/benchmark.orig
+benchmark/bin/benchmark

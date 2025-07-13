@@ -1,0 +1,141 @@
+===========versioning===========
+OS version:
+Linux NASA-Dev-Device 6.8.0-60-generic #63~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Apr 22 19:00:15 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+
+
+
+Python version:
+3.10.12 (main, May 27 2025, 17:12:29) [GCC 11.4.0]
+
+
+LLVM version:
+Ubuntu LLVM version 14.0.0
+  
+  Optimized build.
+  Default target: x86_64-pc-linux-gnu
+  Host CPU: znver3
+
+
+
+GCC version:
+gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+Copyright (C) 2021 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+
+
+Make version:
+GNU Make 4.3
+Built for x86_64-pc-linux-gnu
+Copyright (C) 1988-2020 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+==========binary sizes==========
+for file: toy.ptr.safe.orig
+orig size: 16064
+new size: 84744
+overhead: 5.275398406374502
+for file: toy.safe.orig
+orig size: 16016
+new size: 84368
+overhead: 5.267732267732268
+for file: toy.funccall.ret.safe.orig
+orig size: 16088
+new size: 84752
+overhead: 5.268025857782198
+for file: toy.nested.arr.safe.orig
+orig size: 16024
+new size: 84496
+overhead: 5.27309036445332
+for file: toy.phi.safe.orig
+orig size: 16088
+new size: 84816
+overhead: 5.272003978120338
+for file: toy.arr.safe.orig
+orig size: 16024
+new size: 84624
+overhead: 5.281078382426361
+for file: toy.heap.calloc.safe.orig
+orig size: 16064
+new size: 84592
+overhead: 5.26593625498008
+for file: toy.nested.safe.orig
+orig size: 16024
+new size: 84480
+overhead: 5.27209186220669
+for file: toy.heap.arr.safe.orig
+orig size: 16056
+new size: 84792
+overhead: 5.28101644245142
+for file: toy.funccall.safe.orig
+orig size: 16056
+new size: 84592
+overhead: 5.268560039860488
+for file: toy.libc.timezone.orig
+orig size: 16072
+new size: 84184
+overhead: 5.237929318068691
+for file: toy.heap.reuse.safe.orig
+orig size: 16064
+new size: 84744
+overhead: 5.275398406374502
+for file: toy.heap.safe.orig
+orig size: 16056
+new size: 84568
+overhead: 5.267065271549576
+for file: toy.ptr.self_referential.orig
+orig size: 16032
+new size: 84456
+overhead: 5.267964071856287
+for file: toy.func_ptr.safe.orig
+orig size: 16120
+new size: 84984
+overhead: 5.271960297766749
+orig benchmark: 16488
+new benchmark: 86376
+overhead: 5.238719068413392
+================================
+run size: 10
+original mean: 0.0006190235614776611 (stdev 0.0003726636789214637)
+new mean: 0.0013145601749420166 (stdev 0.0005785738079050998))
+time overhead: 2.1236028105360822
+peak mem usage original: 160825.344 (stdev 61154.42089095581)
+new peak mem usage: 164626.432 (stdev 61573.80947931654)
+space overhead: 1.0236348818255907
+================================
+run size: 100
+original mean: 0.0006670253276824951 (stdev 0.0002786091474069383)
+new mean: 0.0014934537410736083 (stdev 0.0004087676088467189))
+time overhead: 2.2389760614674805
+peak mem usage original: 175374.336 (stdev 81659.44906091416)
+new peak mem usage: 194772.992 (stdev 224387.25310442143)
+space overhead: 1.1106128550074739
+================================
+run size: 1000
+original mean: 0.0007832567691802979 (stdev 0.0003878669788679441)
+new mean: 0.0031485371589660646 (stdev 0.0005660313889961233))
+time overhead: 4.019802040474039
+peak mem usage original: 195297.28 (stdev 94555.56431805114)
+new peak mem usage: 302645.248 (stdev 534769.9878946043)
+space overhead: 1.5496644295302016
+================================
+run size: 10000
+original mean: 0.001561553716659546 (stdev 0.0005405730174638653)
+new mean: 0.02292937111854553 (stdev 0.0012334936348921146))
+time overhead: 14.68369027201685
+peak mem usage original: 225705.984 (stdev 160434.17407089288)
+new peak mem usage: 5979766.784 (stdev 2013699.141216841)
+space overhead: 26.493612078977932
+================================
+run size: 100000
+original mean: 0.007474434614181518 (stdev 0.0007374244372739186)
+new mean: 0.2808453013896942 (stdev 0.007840574020932677))
+time overhead: 37.57411976777964
+peak mem usage original: 247463.936 (stdev 227192.0722191052)
+new peak mem usage: 37412798.464 (stdev 4690181.211614234)
+space overhead: 151.18485169491527
+================================

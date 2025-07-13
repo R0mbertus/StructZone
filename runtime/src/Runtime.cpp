@@ -14,7 +14,7 @@
 
 #define max(a, b) ((a > b) ? a : b)
 
-#define DEBUG_PRINT_ENABLE
+//#define DEBUG_PRINT_ENABLE
 
 #ifdef DEBUG_PRINT_ENABLE
 #define DBG(x) x
@@ -353,4 +353,4 @@ void __rdzone_rm_between(void *freed_ptr, size_t size) {
 
 // You can write anything here and it will be invisible to the outside as it
 // has internal linkage.
-void test_runtime_link() { cerr << "runtime initislised!\n"; }
+void test_runtime_link() { DBG(cerr << "runtime initialized!\n"); }
