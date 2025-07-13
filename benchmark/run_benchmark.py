@@ -72,7 +72,11 @@ def full_run(size: int):
 
 orig_benchmark_size = os.path.getsize("bin/benchmark.orig")
 new_benchmark_size = os.path.getsize("bin/benchmark")
+os_inf = sp.run(["uname", "-a"], capture_output=True, text=True)
 print("="*11 + "versioning" + "="*11)
+print("OS version:")
+print(os_inf.stdout)
+print('\n')
 print("Python version:")
 print(sys.version)
 print('\n')
