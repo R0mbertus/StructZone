@@ -18,8 +18,9 @@ PASS_DIR="../llvm-pass"
 # default rule
 default: all
 
-check: all
-	python3 ./run_tests.py
+bench: all
+	python3 ./run_benchmark.py
+	python3 ./generate_plots.py
 
 all: dirs $(addprefix $(BIN_DIR)/, $(TESTS))
 	clang src/benchmark.c -o bin/benchmark.orig

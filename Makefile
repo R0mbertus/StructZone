@@ -3,6 +3,9 @@ default: all
 check: all
 	make -C ./test check
 
+bench: all
+	make -C ./benchmark bench
+
 all: runtime_makage llvm-pass_makage test_makage benchmark_makage
 
 runtime_makage:
