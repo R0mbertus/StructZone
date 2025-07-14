@@ -1,4 +1,4 @@
-#! /usr/bin/python3
+#!/usr/bin/env python3
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -44,10 +44,21 @@ fig_bin_size, ax_bin_size = plt.subplots()
 ax_bin_size.scatter(bin_size_x, bin_size_y)
 z = np.polyfit(bin_size_x, bin_size_y, 1)
 p = np.poly1d(z)
+
 ax_bin_size.plot(bin_size_x,p(bin_size_x),"r")
 ax_bin_size.set(xlabel="original binary size (bytes)", ylabel="sanitized binary size (bytes)",
     title = "Plot of binary size overhead")
-fig_bin_size.savefig("bin_size.png")
+fig_bin_size.savefig("bin_size.pdf")
+
+plt.figure(figsize=(5,5))
+plt.plot(bin_size_x,p(bin_size_x),"r")
+plt.xlabel(xlabel="original binary size (bytes)", fontsize=13)
+plt.ylabel(ylabel="sanitized binary size (bytes)", fontsize=13)
+plt.xticks(fontsize=13)
+plt.yticks(fontsize=13)
+plt.title("Plot of binary size overhead", fontsize = 18)
+plt.savefig("bin_size.pdf", bbox_inches="tight")
+plt.savefig("bin_size.png", bbox_inches="tight")
 
 run_sizes_x = []
 time_orig_y = []
@@ -78,7 +89,18 @@ ax_time.errorbar(run_sizes_x, time_new_y, yerr=time_new_stdev, ecolor="red", lab
 ax_time.set(xlabel="Run size (no. of structs)", ylabel="execution time (ms)",
     title = "Plot of temporal overhead")
 ax_time.legend()
-fig_time.savefig("time.png")
+fig_time.savefig("time.pdf")
+
+plt.figure(figsize=(5,5))
+plt.errorbar(run_sizes_x, time_orig_y, yerr=time_orig_stdev, ecolor="red", label="Unsanitized")
+plt.errorbar(run_sizes_x, time_new_y, yerr=time_new_stdev, ecolor="red", label="Sanitized")
+plt.xlabel(xlabel="Run size (no. of structs)", fontsize=13)
+plt.ylabel(ylabel="execution time (ms)",fontsize=13)
+plt.xticks(fontsize=13)
+plt.yticks(fontsize=13)
+plt.title("Plot of temporal overhead",fontsize=18)
+plt.savefig("time.pdf",bbox_inches='tight')
+plt.savefig("time.png",bbox_inches='tight')
 
 # Plot the space measurements as a simple plot with error bars.
 fig_space, ax_space = plt.subplots()
@@ -87,4 +109,15 @@ ax_space.errorbar(run_sizes_x, mem_new_y, yerr=mem_new_stdev, ecolor="red", labe
 ax_space.set(xlabel="Run size (no. of structs)", ylabel="peak memory use (bytes)",
     title = "Plot of spatial overhead")
 ax_space.legend()
-fig_space.savefig("space.png")	
+fig_space.savefig("space.pdf")	
+
+plt.figure(figsize=(5,5))
+plt.errorbar(run_sizes_x, mem_orig_y, yerr=mem_orig_stdev, ecolor="red", label="Unsanitized")
+plt.errorbar(run_sizes_x, mem_new_y, yerr=mem_new_stdev, ecolor="red", label="Sanitized")
+plt.xlabel(xlabel="Run size (no. of structs)", fontsize=13)
+plt.ylabel(ylabel="peak memory use (bytes)",fontsize=13)
+plt.xticks(fontsize=13)
+plt.yticks(fontsize=13)
+plt.title("Plot of spatial overhead",fontsize=18)
+plt.savefig("space.pdf",bbox_inches='tight')
+plt.savefig("space.png",bbox_inches='tight')
