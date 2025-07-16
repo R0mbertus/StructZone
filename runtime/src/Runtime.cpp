@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "Runtime.h"
+#include <string.h>
 #include <assert.h>
 #include <iostream>
 #include <malloc.h>
@@ -13,6 +14,7 @@
 // AVL tree implementation in C++
 
 #define max(a, b) ((a > b) ? a : b)
+const char COLOR = 0xaa;
 
 //#define DEBUG_PRINT_ENABLE
 
@@ -328,15 +330,21 @@ void AVLTree::remove_between(uint64_t start, uint64_t end) {
 AVLTree redzones;
 
 void __rdzone_check(void *probe, uint8_t op_width) {
-    if (redzones.CheckPoison((uint64_t)probe, op_width)) {
+    char load = *(char*)probe;
+    if (load == COLOR && redzones.CheckPoison((uint64_t)probe, op_width)) {
         cerr << "ILLEGAL ACCESS AT " << probe << "\n";
         redzones.printTree();
         kill(getpid(), SIGABRT);
     }
 }
 
-void __rdzone_add(void *start, uint64_t size) { redzones.InsertRedzone((uint64_t)start, size); }
-void __rdzone_rm(void *start) { redzones.RemoveRedzone((uint64_t)start); }
+void __rdzone_add(void *start, uint64_t size) {
+    redzones.InsertRedzone((uint64_t)start, size); 
+    memset(start, COLOR, size);
+}
+void __rdzone_rm(void *start) { 
+    redzones.RemoveRedzone((uint64_t)start); 
+}
 
 void __rdzone_reset() { redzones.reset(); }
 
