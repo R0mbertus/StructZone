@@ -37,105 +37,105 @@ There is NO WARRANTY, to the extent permitted by law.
 ==========binary sizes==========
 for file: toy.ptr.safe.orig
 orig size: 16064
-new size: 84744
-overhead: 5.275398406374502
+new size: 84840
+overhead: 5.2813745019920315
 for file: toy.safe.orig
 orig size: 16016
-new size: 84368
-overhead: 5.267732267732268
+new size: 84464
+overhead: 5.273726273726274
 for file: toy.funccall.ret.safe.orig
 orig size: 16088
-new size: 84752
-overhead: 5.268025857782198
+new size: 84848
+overhead: 5.273993038289408
 for file: toy.nested.arr.safe.orig
 orig size: 16024
-new size: 84496
-overhead: 5.27309036445332
+new size: 84592
+overhead: 5.2790813779331005
 for file: toy.phi.safe.orig
 orig size: 16088
-new size: 84816
-overhead: 5.272003978120338
+new size: 84912
+overhead: 5.277971158627548
 for file: toy.arr.safe.orig
 orig size: 16024
-new size: 84624
-overhead: 5.281078382426361
+new size: 84720
+overhead: 5.287069395906141
 for file: toy.heap.calloc.safe.orig
 orig size: 16064
-new size: 84592
-overhead: 5.26593625498008
+new size: 84688
+overhead: 5.27191235059761
 for file: toy.nested.safe.orig
 orig size: 16024
-new size: 84480
-overhead: 5.27209186220669
+new size: 84576
+overhead: 5.27808287568647
 for file: toy.heap.arr.safe.orig
 orig size: 16056
-new size: 84792
-overhead: 5.28101644245142
+new size: 84888
+overhead: 5.286995515695067
 for file: toy.funccall.safe.orig
 orig size: 16056
-new size: 84592
-overhead: 5.268560039860488
+new size: 84688
+overhead: 5.274539113104136
 for file: toy.libc.timezone.orig
 orig size: 16072
-new size: 84184
-overhead: 5.237929318068691
+new size: 84280
+overhead: 5.2439024390243905
 for file: toy.heap.reuse.safe.orig
 orig size: 16064
-new size: 84744
-overhead: 5.275398406374502
+new size: 84840
+overhead: 5.2813745019920315
 for file: toy.heap.safe.orig
 orig size: 16056
-new size: 84568
-overhead: 5.267065271549576
+new size: 84664
+overhead: 5.273044344793224
 for file: toy.ptr.self_referential.orig
 orig size: 16032
-new size: 84456
-overhead: 5.267964071856287
+new size: 84552
+overhead: 5.273952095808383
 for file: toy.func_ptr.safe.orig
 orig size: 16120
-new size: 84984
-overhead: 5.271960297766749
+new size: 85080
+overhead: 5.277915632754342
 orig benchmark: 16488
-new benchmark: 86376
-overhead: 5.238719068413392
+new benchmark: 90224
+overhead: 5.472100921882581
 ================================
 run size: 10
-original mean: 0.0006190235614776611 (stdev 0.0003726636789214637)
-new mean: 0.0013145601749420166 (stdev 0.0005785738079050998))
-time overhead: 2.1236028105360822
-peak mem usage original: 160825.344 (stdev 61154.42089095581)
-new peak mem usage: 164626.432 (stdev 61573.80947931654)
-space overhead: 1.0236348818255907
+original mean: 0.0005687685012817383 (stdev 0.00027870551960551044)
+new mean: 0.0011955382823944092 (stdev 0.0004985675030045836))
+time overhead: 2.1019769549477947
+peak mem usage original: 148504.576 (stdev 57657.45462559136)
+new peak mem usage: 144834.56 (stdev 49062.81023727421)
+space overhead: 0.9752868490732568
 ================================
 run size: 100
-original mean: 0.0006670253276824951 (stdev 0.0002786091474069383)
-new mean: 0.0014934537410736083 (stdev 0.0004087676088467189))
-time overhead: 2.2389760614674805
-peak mem usage original: 175374.336 (stdev 81659.44906091416)
-new peak mem usage: 194772.992 (stdev 224387.25310442143)
-space overhead: 1.1106128550074739
+original mean: 0.0006315009593963623 (stdev 0.00045422742020347247)
+new mean: 0.0013944454193115235 (stdev 0.0008487534745824257))
+time overhead: 2.2081445777128237
+peak mem usage original: 161480.704 (stdev 73738.04729404708)
+new peak mem usage: 161611.776 (stdev 63532.20141520744)
+space overhead: 1.0008116883116884
 ================================
 run size: 1000
-original mean: 0.0007832567691802979 (stdev 0.0003878669788679441)
-new mean: 0.0031485371589660646 (stdev 0.0005660313889961233))
-time overhead: 4.019802040474039
-peak mem usage original: 195297.28 (stdev 94555.56431805114)
-new peak mem usage: 302645.248 (stdev 534769.9878946043)
-space overhead: 1.5496644295302016
+original mean: 0.0007207658290863037 (stdev 0.00042638597099253306)
+new mean: 0.002363696575164795 (stdev 0.0005074288761604825))
+time overhead: 3.279423745935892
+peak mem usage original: 169213.952 (stdev 63749.45881490202)
+new peak mem usage: 186908.672 (stdev 133768.30776748052)
+space overhead: 1.104570100697134
 ================================
 run size: 10000
-original mean: 0.001561553716659546 (stdev 0.0005405730174638653)
-new mean: 0.02292937111854553 (stdev 0.0012334936348921146))
-time overhead: 14.68369027201685
-peak mem usage original: 225705.984 (stdev 160434.17407089288)
-new peak mem usage: 5979766.784 (stdev 2013699.141216841)
-space overhead: 26.493612078977932
+original mean: 0.001497910499572754 (stdev 0.0006785889115384137)
+new mean: 0.013881891250610352 (stdev 0.001034033595030863))
+time overhead: 9.267503802510134
+peak mem usage original: 206962.688 (stdev 80599.91656092631)
+new peak mem usage: 4467589.12 (stdev 2553123.7554062963)
+space overhead: 21.586447118429387
 ================================
 run size: 100000
-original mean: 0.007474434614181518 (stdev 0.0007374244372739186)
-new mean: 0.2808453013896942 (stdev 0.007840574020932677))
-time overhead: 37.57411976777964
-peak mem usage original: 247463.936 (stdev 227192.0722191052)
-new peak mem usage: 37412798.464 (stdev 4690181.211614234)
-space overhead: 151.18485169491527
+original mean: 0.007284135103225708 (stdev 0.0007891327834465718)
+new mean: 0.14930620908737183 (stdev 0.003953309930208278))
+time overhead: 20.497451924148557
+peak mem usage original: 248643.584 (stdev 251442.11975884982)
+new peak mem usage: 37318033.408 (stdev 4618512.724325811)
+space overhead: 150.08645229309437
 ================================
